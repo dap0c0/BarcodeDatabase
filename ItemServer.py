@@ -25,7 +25,7 @@ class ItemProtocol(Resource):
         # Get the value of the search key and parse it for security
         search_arg = request.args[b"search"][0].decode("utf-8")
         arg_escaped = html.escape(search_arg)
-        matches = self._item_database.search_matches(arg_escaped)
+        matches = self._item_database.search_matches_iterative(arg_escaped)
 
         # Send back response to the client
         response = json.dumps(matches, indent=self._indents).encode("utf-8")
@@ -75,5 +75,4 @@ class ItemServer(object):
         reactor.run()
 
 item_server = ItemServer(ItemProtocol("test_file.json"))
-# item_server.run_http()
 item_server.run_https(cert_file="crt.pem", key_file="key.pem")
