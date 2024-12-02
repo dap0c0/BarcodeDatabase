@@ -42,9 +42,6 @@ class WebCrawler(ABC):
             self._extractor.set_pattern(WebCrawler.HYPERLINK_REGEX_PATTERN)
 
         else:
-            # TODO:
-            # - it's possible that we might have to make the url_criteria into a
-            # stronger regex pattern
             self._extractor.set_pattern(url_criteria)
 
         return self._extractor.get_matches(input)
@@ -77,6 +74,7 @@ class TwistedWebCrawler(WebCrawler):
             scheme = parsed.scheme
             host = parsed.netloc
             path = parsed.path
+            query = parsed.query
 
             if len(path) == 0:
                 path = "/"
@@ -84,7 +82,12 @@ class TwistedWebCrawler(WebCrawler):
             # Allow factory to bridge between main code and the reactor loop.
             # The bridge is primarily through callbacks and errbacks added
             # to the deferred at runtime.
-            factory = SimpleHTTPFactory(d, url, scheme, host, path, debug)
+            if len(query) == 0:
+                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, None)
+
+            else:
+                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, query)
+
             from twisted.internet import reactor
 
             # Connect to the appropriate port.
@@ -111,7 +114,22 @@ class TwistedWebCrawler(WebCrawler):
         # Callback #1: protocol successfully received all HTTP data.
         # Attempt to extract all links from the HTTP content.
         def extract_links_http(http_response: HTTPResponse):
-            links = self._extract_links(str(http_response), url_criteria)
+            if url_criteria:
+                links = self._extract_links(str(http_response), url_criteria)
+
+            else:
+                links = self._extract_links(str(http_response), WebCrawler.HYPERLINK_REGEX_PATTERN)
+
+            return links
+
+        # Callback #2: all links were successfully extracted. For debugging,
+        # if enabled, print all links that were extracted.
+        def display_links(links: list):
+            print(f"<---- {len(links)} links extracted! ---->")
+
+            for link in links:
+                print(link)
+
             return links
 
         # Callback #2: all links were successfully extracted. Enqueue them
@@ -129,6 +147,7 @@ class TwistedWebCrawler(WebCrawler):
         # Callback #3: all links were successfully enqueued.
         # Promise http for all of them.
         def promise_http_multiple(num_to_request: int):
+            
             url_mutable = [None]
 
             for i in range(num_to_request):
@@ -142,23 +161,23 @@ class TwistedWebCrawler(WebCrawler):
             assert isinstance(curr_url_mutable[0], str)
             d = self._promise_http(curr_url_mutable[0], debug)
             d.addCallback(extract_links_http)
+            d.addCallback(display_links)
             d.addCallback(enqueue_links)
             d.addCallback(promise_http_multiple)
 
-        if url_criteria:
-            if self._is_valid_url(url_criteria):
-                # Kickoff processing with the seed url
-                print(f"Seed is {self.seed}")
-                self._url_queue.enqueue(self.seed)
-                curr_url = self._url_queue.dequeue() # a bit redundant, but thats ok
-                curr_url_mutable = [curr_url]
-
-                from twisted.internet import reactor
-                reactor.callWhenRunning(react, curr_url_mutable)
-                reactor.run()
-
-            else:
+        # Check whether the url_criteria is valid when necessary
+        if url_criteria and not self._is_valid_url(url_criteria):
                 raise URLError(f"The url_criteria {url_criteria} doesn't follow URL standards.")
+
+        # Kickoff processing with the seed url
+        print(f"Seed is {self.seed}")
+        self._url_queue.enqueue(self.seed)
+        curr_url = self._url_queue.dequeue() # a bit redundant, but thats ok
+        curr_url_mutable = [curr_url]
+
+        from twisted.internet import reactor
+        reactor.callWhenRunning(react, curr_url_mutable)
+        reactor.run()
 
 def test_crawl():
     def test_crawl_criteria(seed: str, url_criteria: str):
@@ -169,8 +188,62 @@ def test_crawl():
         crawler = TwistedWebCrawler(seed, "bruh.txt")
         crawler.crawl(True)
 
-    test_crawl_criteria("https://www.realcanadiansuperstore.ca/search?search-bar=meat", "https://www.realcanadiansuperstore.ca/")
+    url_criterion = r"(?:https://www.realcanadiansuperstore.ca)" + \
+                    r"(?:/[\w%-]+)*" + \
+                    r"(?:/)" + \
+                    r"(?:[\w-]+)?" + \
+                    r"(?:\?(?:[\w%-]+=[\w%-]+)+)?" # still need to add the & between each query param
+
+    url_criterion = r"(?:" + url_criterion + r")"
+
+    test_crawl_criteria("https://www.realcanadiansuperstore.ca/men-s-woven-shacket/p/W4MR053874001_EA", url_criterion)
+    # test_crawl_criteria("https://www.realcanadiansuperstore.ca/search?search-bar=meat", url_criterion)
+    # test_crawl_criteria("https://www.realcanadiansuperstore.ca/search?search-bar=Milk", url_criterion)
+    # test_crawl_wo_criteria("https://www.realcanadiansuperstore.ca/search?search-bar=meat")
+
+# Counters
+num_pass = 0
+num_fail = 0
+
+def test_extraction():
+    # Criterion regex
+    url_criterion = r"(?:https://www.realcanadiansuperstore.ca)" + \
+                    r"(?:/[\w%-]+)*" + \
+                    r"(?:/)" + \
+                    r"(?:[\w-]+)?" + \
+                    r"(?:\?(?:[\w%-]+=[\w%-]+)+)?" # still need to add the & between each query param
+
+    url_criterion = r"(?:" + url_criterion + r")"
+
+    # Testing functions
+    def extract_criteria(url: str, url_criteria: str):
+            ext = PatternExtractor()
+            ext.set_pattern(url_criteria)
+            links = ext.get_matches(url)
+            return links
+
+    ext_crit = lambda url: extract_criteria(url, url_criterion)
+    verify_correct = lambda url: ext_crit(url)[0] == url
+    summary = lambda: print(f"\n<------ Summary ------>\n# Passed: {num_pass}\n# Failed: {num_fail}")
+    
+    def check_url(url: str):
+        if verify_correct(url):
+            print(f"Success: {url} matched correctly.")
+            global num_pass
+            num_pass += 1
+
+        else:
+            print(f"Failure: {url} matched incorrectly.")
+            global num_fail
+            num_fail += 1
+
+    # Test cases
+    check_url("https://www.realcanadiansuperstore.ca/sauce-rib-chicken/p/21184618_EA?source=sptd")
+    summary()
+
+    
 
 if __name__ == "__main__":
     test_crawl()
+    # test_extraction()
 
