@@ -9,6 +9,19 @@ class ItemProtocol(Resource):
     ''' HTTP protocol for serving items from the 
         supplied item database.'''
     isLeaf = True
+    ITEM_FORMAT_JSON = {"url": "",
+                        "brand": "",
+                        "flavor": "",
+                        "weight": "",
+                        "volume": "",
+                        "count": "",
+                        "company": "",
+                        "manufacturer": "",
+                        "upc": "",
+                        "ean": "",
+                        "asin": "",
+                        "price": ""
+                        }
 
     def __init__(self, file_path, indents: int=4):
         Resource.__init__(self)
@@ -32,7 +45,91 @@ class ItemProtocol(Resource):
         return response
 
     def render_POST(self, request):
-        pass
+        ''' Client wants to post a new item to the
+        database.
+
+        Client passes in a json representing the
+        data of the item in the following format:
+        {"<product_name>": {
+            "url": "",
+            "brand": "",
+            "flavor": "",
+            "weight": "",
+            "volume": "",
+            "count": "",
+            "company": "",
+            "manufacturer": "",
+            "upc": "",
+            "ean": "",
+            "asin": "",
+            "price": "",
+        }'''
+        # Get the data. Assure that it is json.
+        # If json, ensure that it is the correct format
+        # for submission of data.
+        data = request.content.read()
+        
+        try:
+            data_json = json.loads(data)
+
+            if self._check_format_json(data_json):
+                # Get name of the item
+                product_name = list(data_json.keys())[0]
+
+                # Get the values of the item and
+                # write into the database
+                values_dict = data_json[product_name]
+                self._item_database.write_data(product_name=product_name,
+                                                url=values_dict["url"],
+                                                brand=values_dict["brand"],
+                                                flavor=values_dict["flavor"],
+                                                weight=values_dict["weight"],
+                                                volume=values_dict["volume"],
+                                                count=values_dict["count"],
+                                                company=values_dict["company"],
+                                                manufacturer=values_dict["manufacturer"],
+                                                upc=values_dict["upc"],
+                                                ean=values_dict["ean"],
+                                                asin=values_dict["asin"],
+                                                price=values_dict["price"])
+
+        except json.decoder.JSONDecodeError:
+            pass
+
+        else:
+            return json.dumps(data_json).encode("utf-8")
+
+    #------ Helper functions ---------#
+    def _check_format_json(self, dictionary: dict):
+        ''' Check that the dictionary tables
+        the same values as required by the
+        item database.'''
+        assert isinstance(dictionary, dict)
+        
+        # The dictionary must be tabled/keyed by the
+        # product name.
+        if len(dictionary) != 1:
+            return False
+    
+        for key in dictionary:
+            if not isinstance(key, str):
+                return False
+
+        # Check that all the values of dictionary follow
+        # the predisclosed format of the class
+        # invariant ITEM_FORMAT_JSON.
+        for key in dictionary:
+            if not isinstance(dictionary[key], dict):
+                return False
+
+            else:
+                sub_dict = dictionary[key]
+
+                for sub_key in sub_dict:
+                    if sub_key not in ItemProtocol.ITEM_FORMAT_JSON:
+                        print(sub_key)
+                        return False
+        return True
 
 class ItemServer(object):
     def __init__(self, protocol):
@@ -49,7 +146,7 @@ class ItemServer(object):
         reactor.run()
 
     def run_https(self, cert_file, key_file, port=443):
-        '''Serve items through https at the previously
+        '''Serve items through https at the previously
         supplied port.'''
         assert isinstance(cert_file, str)
         assert isinstance(key_file, str)
