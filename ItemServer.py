@@ -1,7 +1,9 @@
 from ItemDatabase import ItemDatabase
+from ScryptPasswordDB import ScryptPasswordDB
 from twisted.web.server import Site
 from twisted.web.resource import Resource
 from twisted.internet import reactor, endpoints, ssl
+import base64
 import json
 import html
 
@@ -23,9 +25,10 @@ class ItemProtocol(Resource):
                         "price": ""
                         }
 
-    def __init__(self, file_path, indents: int=4):
+    def __init__(self, file_path, pass_database: ScryptPasswordDB, indents: int=4):
         Resource.__init__(self)
         self._indents = indents
+        self._pass_database = pass_database
         self._item_database = ItemDatabase(file_path)
 
     def render_GET(self, request):
@@ -46,7 +49,8 @@ class ItemProtocol(Resource):
 
     def render_POST(self, request):
         ''' Client wants to post a new item to the
-        database.
+        database. Ensure that the client is an
+        authenticated user.
 
         Client passes in a json representing the
         data of the item in the following format:
@@ -64,40 +68,46 @@ class ItemProtocol(Resource):
             "asin": "",
             "price": "",
         }'''
-        # Get the data. Assure that it is json.
-        # If json, ensure that it is the correct format
-        # for submission of data.
-        data = request.content.read()
+        # Authenticate the user
+        auth_header = request.getHeader("Authorization")
+        _, b64_token = auth_header.split(" ")
+        username, password = self._decode_basic_auth(b64_token)
+        print(username.__class__)
+        print(password.__class__)
         
-        try:
-            data_json = json.loads(data)
+        if self._pass_database.verify_pass_file(username, password):
+            # Get the data. Assure that it is json.
+            # If json, ensure that it is the correct format
+            # for submission of data.
+            data = request.content.read()
+            
+            try:
+                data_json = json.loads(data)
 
-            if self._check_format_json(data_json):
-                # Get name of the item
-                product_name = list(data_json.keys())[0]
+                if self._check_format_json(data_json):
+                    # Get name of the item
+                    product_name = list(data_json.keys())[0]
 
-                # Get the values of the item and
-                # write into the database
-                values_dict = data_json[product_name]
-                self._item_database.write_data(product_name=product_name,
-                                                url=values_dict["url"],
-                                                brand=values_dict["brand"],
-                                                flavor=values_dict["flavor"],
-                                                weight=values_dict["weight"],
-                                                volume=values_dict["volume"],
-                                                count=values_dict["count"],
-                                                company=values_dict["company"],
-                                                manufacturer=values_dict["manufacturer"],
-                                                upc=values_dict["upc"],
-                                                ean=values_dict["ean"],
-                                                asin=values_dict["asin"],
-                                                price=values_dict["price"])
+                    # Get the values of the item and
+                    # write into the database
+                    values_dict = data_json[product_name]
+                    self._item_database.write_data(product_name=product_name,
+                                                    url=values_dict["url"],
+                                                    brand=values_dict["brand"],
+                                                    flavor=values_dict["flavor"],
+                                                    weight=values_dict["weight"],
+                                                    volume=values_dict["volume"],
+                                                    count=values_dict["count"],
+                                                    company=values_dict["company"],
+                                                    manufacturer=values_dict["manufacturer"],
+                                                    upc=values_dict["upc"],
+                                                    ean=values_dict["ean"],
+                                                    asin=values_dict["asin"],
+                                                    price=values_dict["price"])
+                    return json.dumps(data_json, indent=self._indents).encode("utf-8")
 
-        except json.decoder.JSONDecodeError:
-            pass
-
-        else:
-            return json.dumps(data_json).encode("utf-8")
+            except json.decoder.JSONDecodeError:
+                pass
 
     #------ Helper functions ---------#
     def _check_format_json(self, dictionary: dict):
@@ -131,16 +141,27 @@ class ItemProtocol(Resource):
                         return False
         return True
 
+    def _decode_basic_auth(self,
+                           token: str) -> tuple:
+        assert isinstance(token, str)
+        ''' Return the username and password from the
+        provided basic auth token.'''
+        # Decode the base64 token
+        # and return the pair.
+        token_decoded = base64.b64decode(token)
+        username, password = token_decoded.split(b":")
+        return (str(username, "utf-8"), password)
+
 class ItemServer(object):
     def __init__(self, protocol):
         assert isinstance(protocol, ItemProtocol)
-        self.protocol = protocol
+        self._protocol = protocol
 
     def run_http(self, port=8080):
         ''' Serve items through http at the
         supplied port.'''
         assert isinstance(port, int)
-        factory = Site(self.protocol)
+        factory = Site(self._protocol)
         http_endpoint = endpoints.TCP4ServerEndpoint(reactor, port)
         http_endpoint.listen(factory)
         reactor.run()
@@ -167,9 +188,11 @@ class ItemServer(object):
         )
 
         # Serve items via the pre-defined protocol
-        factory = Site(self.protocol)
+        factory = Site(self._protocol)
         ssl_endpoint.listen(factory)
         reactor.run()
 
-item_server = ItemServer(ItemProtocol("test_file.json"))
+# Allow authentication through our password database
+pass_db = ScryptPasswordDB()
+item_server = ItemServer(ItemProtocol("test_file.json", pass_db))
 item_server.run_https(cert_file="crt.pem", key_file="key.pem")
