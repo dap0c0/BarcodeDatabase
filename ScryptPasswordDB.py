@@ -9,6 +9,8 @@ class ScryptPasswordDB():
     DEFAULT_DIRECTORY_PATH = "./pass/"
     DELIMITER = "$"
     RW_OWNER_ONLY = 600
+    FILE_POSTFIX = ".scrypt"
+    DEFAULT_DK_LENGTH = 32
 
     def __init__(self,
                  min_password_size: int=MIN_PASSWORD_SIZE,
@@ -31,10 +33,9 @@ class ScryptPasswordDB():
                         password: bytes,
                         N: int=2048,
                         r: int=8,
-                        p: int=1,
-                        dkLen: int=32,
+                        p: int=1
                         ):
-        ''' Create a pass file with /<DEFAULT_DIRECTORY_PATH>/<username>.scrypt
+        ''' Create a pass file with /<DEFAULT_DIRECTORY_PATH>/<username>.<FILE_PO<FILE_POSTFIX>
         as the file path.
 
         Utilize the inputted parameters N, r, p, dkLen for hash
@@ -42,13 +43,13 @@ class ScryptPasswordDB():
 
         Write a single line into the file as following:
         <N>$<r>$<p>$<salt>$<hash>'''
-        file_path = self._dir_name + username + ".scrypt"
+        file_path = self._dir_name + username + ScryptPasswordDB.FILE_POSTFIX
 
         # Generate hash with salt, then write
         # all details to the file.
         with open(file_path, "w") as wfile:
             salt = salt_generator(64).encode("utf-8")
-            hash = pyscrypt.hash(password, salt, N, r, p, dkLen).hex()
+            hash = pyscrypt.hash(password, salt, N, r, p, ScryptPasswordDB.DEFAULT_DK_LENGTH).hex()
             values = (str(N), str(r), str(p), salt.decode("utf-8"), str(hash))
             delimiter = ScryptPasswordDB.DELIMITER
             line = delimiter.join(values)
@@ -57,5 +58,34 @@ class ScryptPasswordDB():
 
         print(f"Wrote to file {file_path}")
 
-    def gen_random_salt(self, num_bytes: int=64) -> str:
+    def gen_random_salt(self, num_bytes: int=16) -> str:
         return secrets.token_hex(num_bytes)
+
+    def verify_pass_file(self,
+                    username: str,
+                    password: bytes
+                    ) -> bool:
+        ''' Verify that the password entered matches the
+        hash that exists for the given username.'''
+        N, r, p, salt, hash = self._get_pass_params(username)
+
+        # Recompute the hash and compare
+        hash_new_bytes = pyscrypt.hash(password, salt.encode("utf-8"), N, r, p, ScryptPasswordDB.DEFAULT_DK_LENGTH)
+        hash_old_bytes = bytes.fromhex(hash)
+        
+        print(f"OLD: {hash_old_bytes}")
+        print(f"NEW: {hash_new_bytes}")
+        return hash_old_bytes == hash_new_bytes
+
+    def _get_pass_path(self, username: str):
+        return self._dir_name + username + self.FILE_POSTFIX
+
+    def _get_pass_params(self,
+                         username: str
+                         ) -> tuple:
+        ''' Return (<N>, <r>, <p>, <salt>, <hash>)
+        from the file <username>.'''
+        with open(self._get_pass_path(username),  "r") as rfile:
+            N, r, p, salt, hash = rfile.read().split(ScryptPasswordDB.DELIMITER)
+            
+        return (int(N), int(r), int(p), salt, hash)
