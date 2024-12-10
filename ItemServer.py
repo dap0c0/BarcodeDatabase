@@ -1,6 +1,7 @@
 from ItemDatabase import ItemDatabase
 from ScryptPasswordDB import ScryptPasswordDB
-from twisted.web.server import Site
+from SessionHandler import SessionHandler
+from twisted.web.server import Site, Session
 from twisted.web.resource import Resource
 from twisted.internet import reactor, endpoints, ssl
 import base64
@@ -24,12 +25,14 @@ class ItemProtocol(Resource):
                         "asin": "",
                         "price": ""
                         }
+    SESSION_ID_KEY = b"TWISTED_SECURE_SESSION"
 
     def __init__(self, file_path, pass_database: ScryptPasswordDB, indents: int=4):
         Resource.__init__(self)
         self._indents = indents
         self._pass_database = pass_database
         self._item_database = ItemDatabase(file_path)
+        self._session_handler = SessionHandler()
 
     def render_GET(self, request):
         '''Client must search through URL api as such:
@@ -38,14 +41,18 @@ class ItemProtocol(Resource):
         The protocol will return all recursive grep matches
         in json format.'''
 
-        # Get the value of the search key and parse it for security
-        search_arg = request.args[b"search"][0].decode("utf-8")
-        arg_escaped = html.escape(search_arg)
-        matches = self._item_database.search_matches_iterative(arg_escaped)
+        # Upon authentication, ensure that the session id is maintained.
+        if self._authenticate_request(request):
+            self._session_handler.add_session(request.getSession())
 
-        # Send back response to the client
-        response = json.dumps(matches, indent=self._indents).encode("utf-8")
-        return response
+            # Get the value of the search key and parse it for security
+            search_arg = request.args[b"search"][0].decode("utf-8")
+            arg_escaped = html.escape(search_arg)
+            matches = self._item_database.search_matches_iterative(arg_escaped)
+
+            # Send back response to the client
+            response = json.dumps(matches, indent=self._indents).encode("utf-8")
+            return response
 
     def render_POST(self, request):
         ''' Client wants to post a new item to the
@@ -68,14 +75,8 @@ class ItemProtocol(Resource):
             "asin": "",
             "price": "",
         }'''
-        # Authenticate the user
-        auth_header = request.getHeader("Authorization")
-        _, b64_token = auth_header.split(" ")
-        username, password = self._decode_basic_auth(b64_token)
-        print(username.__class__)
-        print(password.__class__)
-        
-        if self._pass_database.verify_pass_file(username, password):
+       
+        if self._authenticate_request(request):
             # Get the data. Assure that it is json.
             # If json, ensure that it is the correct format
             # for submission of data.
@@ -110,6 +111,44 @@ class ItemProtocol(Resource):
                 pass
 
     #------ Helper functions ---------#
+    def _authenticate_request(self, request):
+        ''' If user and password are supplied, compare with
+        hash stored in the password database and return True.
+
+        If no user or password are supplied, compare the TWISTED_SESSION
+        token (session id) with the current token pool.
+        Return True if authenticated.'''
+
+        # Authenticate the user if auth provided
+        auth_header = request.getHeader("Authorization")
+
+        if auth_header:
+            _, b64_token = auth_header.split(" ")
+            username, password = self._decode_basic_auth(b64_token)
+
+            if username != "" and self._pass_database.verify_pass_file(username, password):
+                return True
+
+        # No authorization header provided.
+        # Check session id.
+        else:
+            session_id = request.getCookie(ItemProtocol.SESSION_ID_KEY)
+            print(f"Session id is {session_id}")
+
+            if session_id:
+                return self._session_handler.verify_session(request.getSession())
+
+        # Username, password, and session id all invalid
+        return False
+
+    def _decode_basic_auth(self, token: str) -> tuple:
+        assert isinstance(token, str)
+        ''' Return the username and password from the
+        provided basic auth token.'''
+        token_decoded = base64.b64decode(token)
+        username, password = token_decoded.split(b":")
+        return (str(username, "utf-8"), password)
+
     def _check_format_json(self, dictionary: dict):
         ''' Check that the dictionary tables
         the same values as required by the
@@ -140,17 +179,6 @@ class ItemProtocol(Resource):
                         print(sub_key)
                         return False
         return True
-
-    def _decode_basic_auth(self,
-                           token: str) -> tuple:
-        assert isinstance(token, str)
-        ''' Return the username and password from the
-        provided basic auth token.'''
-        # Decode the base64 token
-        # and return the pair.
-        token_decoded = base64.b64decode(token)
-        username, password = token_decoded.split(b":")
-        return (str(username, "utf-8"), password)
 
 class ItemServer(object):
     def __init__(self, protocol):
