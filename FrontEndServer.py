@@ -1,38 +1,20 @@
 from ItemServer import ItemProtocol, ItemServer
 from ScryptPasswordDB import ScryptPasswordDB
-from twisted.web.server import Site
+from HTTPResponse import HTTPResponse
+from SimpleHTTPFactory import SimpleHTTPFactory
+from twisted.web.server import Site, NOT_DONE_YET
 from twisted.web.resource import Resource
+from twisted.internet.defer import Deferred
+from twisted.internet.endpoints import SSL4ClientEndpoint, connectProtocol
+from twisted.internet.protocol import Protocol
 from twisted.internet import reactor, endpoints, ssl
 from twisted.web.util import redirectTo
+import urllib.parse
 import html
 import base64
 
-# Possibly unused
-class LoginAuthenticator():
-    ''' Authenticates logins by comparing the decoded
-    base64 token with the hashes for respective users.'''
-    def __init__(self, pass_database: ScryptPasswordDB):
-        assert isinstance(pass_database, ScryptPasswordDB)
-        self._pass_database = pass_database
-
-    def authenticate_params(self, username: str, password: str):
-        ''' Regenerate hash from the supplied
-        username and password. Compare it with the one
-        stored in the password database.
-
-        Returns True upon match, False if not.'''
-        assert isinstance(username, str)
-        assert isinstance(password, str)
-        
-        if username != "" and \
-            password != "" and \
-            self._pass_database.verify_pass_file(
-                username,
-                bytes(password, "utf-8")
-            ):
-            return True
-
-        return False
+HTTP_PORT = 80
+ITEM_SERVER_HTTPS_PORT = 1931
 
 class LoginPage(Resource):
     def __init__(self, authenticator: LoginAuthenticator):
@@ -118,13 +100,15 @@ class SearchPage(Resource):
 
             For all items returned in the search page,
             table them and display hyperlinks to each page.'''
+
         # If any query paramaters are provided in the
         # url, perform a search using those values.
-        search_query = request.args[b"search"][0].decode("utf-8")
-        search_query = html.escape(search_query)
+        try:
+            search_query = request.args[b"search"][0].decode("utf-8")
+            search_query = html.escape(search_query)
 
-        if not search_query:
-            html = f'''<!DOCTYPE HTML>
+        except:
+            to_render = f'''<!DOCTYPE HTML>
                             <html>
                                 <head>
                                     <meta charset='utf-8'>
@@ -143,7 +127,68 @@ class SearchPage(Resource):
                                     </form>
                                 </body>
                             </html>'''
-            return html.encode("utf-8")
+            return to_render.encode("utf-8")
+
+        else:
+
+            def write_response(data: HTTPResponse):
+                ''' Upon receiving the response, return it
+                to the transport.'''
+                request.write(data.content.encode("utf-8"))
+                request.finish()
+
+            # Query the item server to perform a recursive search
+            api_url = f"https://localhost:1931/?search={search_query}"
+            d = self._promise_http(api_url, debug=True)
+            d.addCallback(write_response)
+            return NOT_DONE_YET
+        
+    def _react(self, url: str, debug: bool=False):
+        def display_json(data: bytes):
+            print(data)
+
+        d = self._promise_http(url, debug)
+        d.addCallback(display_json)
+
+    def _promise_http(self, url: str, debug: bool=False) -> Deferred:
+        ''' Issue an http request to the ItemServer endpoint 
+            using the given url.'''
+        d = Deferred()
+
+        # Get relevant information from the url
+        parsed = urllib.parse.urlparse(url)
+        scheme = parsed.scheme
+        host = parsed.netloc
+        path = parsed.path
+        query = parsed.query
+
+        if len(path) == 0:
+            path = "/"
+
+        # Remove the port from the netloc to prevent
+        # dns lookup errors.
+        if len(host.split(":")) == 2:
+            host, _ = host.split(":")
+
+        # Allow factory to bridge between main code and the reactor loop.
+        # The bridge is primarily through callbacks and errbacks added
+        # to the deferred at runtime.
+        if len(query) == 0:
+            factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, None)
+
+        else:
+            factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, query)
+
+        # Connect to the appropriate port.
+        # Upon connection, the factory will delegate work
+        # to its protocol and return results through deferred.
+        if scheme == "http":
+            reactor.connectTCP(host, HTTP_PORT, factory)
+
+        elif scheme == "https":
+            reactor.connectSSL(host, ITEM_SERVER_HTTPS_PORT, factory, ssl.ClientContextFactory())
+
+        return d
 
 # Create the resource
 root = Resource()
@@ -155,6 +200,6 @@ root.putChild(b"search", SearchPage())
 factory = Site(root)
 
 # Serve connections
-endpoint = endpoints.TCP4ServerEndpoint(reactor, 80)
+endpoint = endpoints.TCP4ServerEndpoint(reactor, HTTP_PORT)
 endpoint.listen(factory)
 reactor.run()
