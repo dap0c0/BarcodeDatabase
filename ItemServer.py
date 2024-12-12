@@ -42,17 +42,18 @@ class ItemProtocol(Resource):
         in json format.'''
 
         # Upon authentication, ensure that the session id is maintained.
-        if self._authenticate_request(request):
-            self._session_handler.add_session(request.getSession())
+        print(request.requestHeaders)
+        # if self._authenticate_request(request):
+        #    self._session_handler.add_session(request.getSession())
 
-            # Get the value of the search key and parse it for security
-            search_arg = request.args[b"search"][0].decode("utf-8")
-            arg_escaped = html.escape(search_arg)
-            matches = self._item_database.search_matches_iterative(arg_escaped)
+        # Get the value of the search key and parse it for security
+        search_arg = request.args[b"search"][0].decode("utf-8")
+        arg_escaped = html.escape(search_arg)
+        matches = self._item_database.search_matches_iterative(arg_escaped)
 
-            # Send back response to the client
-            response = json.dumps(matches, indent=self._indents).encode("utf-8")
-            return response
+        # Send back response to the client
+        response = json.dumps(matches, indent=self._indents).encode("utf-8")
+        return response
 
     def render_POST(self, request):
         ''' Client wants to post a new item to the
@@ -181,20 +182,12 @@ class ItemProtocol(Resource):
         return True
 
 class ItemServer(object):
+    DEFAULT_PORT = 1931
     def __init__(self, protocol):
         assert isinstance(protocol, ItemProtocol)
         self._protocol = protocol
 
-    def run_http(self, port=8080):
-        ''' Serve items through http at the
-        supplied port.'''
-        assert isinstance(port, int)
-        factory = Site(self._protocol)
-        http_endpoint = endpoints.TCP4ServerEndpoint(reactor, port)
-        http_endpoint.listen(factory)
-        reactor.run()
-
-    def run_https(self, cert_file, key_file, port=443):
+    def run_https(self, cert_file, key_file, port=DEFAULT_PORT):
         '''Serve items through https at the previously
         supplied port.'''
         assert isinstance(cert_file, str)
@@ -222,5 +215,7 @@ class ItemServer(object):
 
 # Allow authentication through our password database
 pass_db = ScryptPasswordDB()
-item_server = ItemServer(ItemProtocol("test_file.json", pass_db))
-item_server.run_https(cert_file="crt.pem", key_file="key.pem")
+
+if __name__ == "__main__":
+    item_server = ItemServer(ItemProtocol("test_file.json", pass_db))
+    item_server.run_https(cert_file="crt.pem", key_file="key.pem")

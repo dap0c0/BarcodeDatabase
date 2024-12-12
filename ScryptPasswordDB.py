@@ -6,7 +6,7 @@ class ScryptPasswordDB():
     MAX_USERS = 10
     MIN_PASSWORD_SIZE = 12
     MAX_PASSWORD_SIZE = 50
-    DEFAULT_DIRECTORY_PATH = "./pass/"
+    DEFAULT_DIRECTORY_PATH = "./user-pass/"
     DELIMITER = "$"
     RW_OWNER_ONLY = 600
     FILE_POSTFIX = ".scrypt"
@@ -28,12 +28,12 @@ class ScryptPasswordDB():
             os.mkdir(self._dir_name, mode=600)
 
     def write_pass_file(self,
-                        salt_generator,
                         username: str,
                         password: bytes,
                         N: int=2048,
                         r: int=8,
-                        p: int=1
+                        p: int=1,
+                        salt_generator=None
                         ):
         ''' Create a pass file with /<DEFAULT_DIRECTORY_PATH>/<username>.<FILE_PO<FILE_POSTFIX>
         as the file path.
@@ -48,7 +48,12 @@ class ScryptPasswordDB():
         # Generate hash with salt, then write
         # all details to the file.
         with open(file_path, "w") as wfile:
-            salt = salt_generator(64).encode("utf-8")
+            if salt_generator:
+                salt = salt_generator(64).encode("utf-8")
+
+            else:
+                salt = self.gen_random_salt()
+
             hash = pyscrypt.hash(password, salt, N, r, p, ScryptPasswordDB.DEFAULT_DK_LENGTH).hex()
             values = (str(N), str(r), str(p), salt.decode("utf-8"), str(hash))
             delimiter = ScryptPasswordDB.DELIMITER
@@ -66,8 +71,17 @@ class ScryptPasswordDB():
                     password: bytes
                     ) -> bool:
         ''' Verify that the password entered matches the
-        hash that exists for the given username.'''
-        N, r, p, salt, hash = self._get_pass_params(username)
+        hash that exists for the given username.
+
+        If the username's file doesn't exist, return False.'''
+        try:
+            N, r, p, salt, hash = self._get_pass_params(username)
+
+        # Prevent username enumeration through footprinting.
+        # Generate a random hash to prevent timed attacks.
+        except FileNotFoundError:
+            pyscrypt.hash(b"bar", self.gen_random_salt().encode("utf-8"), N=2048, r=8, p=1, dkLen=ScryptPasswordDB.DEFAULT_DK_LENGTH)
+            return False
 
         # Recompute the hash and compare
         hash_new_bytes = pyscrypt.hash(password, salt.encode("utf-8"), N, r, p, ScryptPasswordDB.DEFAULT_DK_LENGTH)

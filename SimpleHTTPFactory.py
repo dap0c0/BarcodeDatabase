@@ -5,18 +5,21 @@ from HTTPResponse import HTTPResponse
 
 class SimpleHTTPFactory(ClientFactory):
     def __init__(self, deferred: defer.Deferred, url: str, scheme: str, 
-                 host: str, path: str, debug: bool):
+                 host: str, path: str, debug: bool, query: str | None):
         self.scheme = scheme
         self.url = url
         self.host = host
         self.path = path
         self.debug = debug
+        self.query = query
         
         # Allow callbacks and errbacks
         self.deferred = deferred
 
+        print("Factory built")
+
     def buildProtocol(self, addr):
-        return SimpleHTTP(self, self.url, self.scheme, self.host, self.path, self.debug)
+        return SimpleHTTP(self, self.url, self.scheme, self.host, self.path, self.debug, self.query)
         
     def http_finished(self, http_response: HTTPResponse):
         assert isinstance(http_response, HTTPResponse)

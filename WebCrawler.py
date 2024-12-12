@@ -1,12 +1,13 @@
+import urllib.parse
 from re import error
-from SimpleHTTPFactory import SimpleHTTPFactory
+from abc import ABC, abstractmethod
 from twisted.internet.defer import Deferred
 from twisted.internet import ssl
 from PatternExtractor import PatternExtractor
 from HTTPResponse import HTTPResponse
+from SimpleHTTPFactory import SimpleHTTPFactory
 from Queue import LLQueue
-import urllib.parse
-from abc import ABC, abstractmethod
+from FileInterface import LinkWriter
 
 class URLError(error):
     pass
@@ -21,7 +22,7 @@ class WebCrawler(ABC):
         assert isinstance(sleep, float) or isinstance(sleep, int)
         assert sleep >= 0
         self.seed = seed
-        self.results_file = results_file
+        self.file_interface = LinkWriter(results_file)
         self.sleep = sleep
         self.http_responses = {} # Each url will contain a list of links
 
@@ -55,6 +56,12 @@ class WebCrawler(ABC):
             return False
 
         return True
+
+    def shutdown(self):
+        ''' Close the file_interface and stop the reactor.'''
+        from twisted.internet import reactor
+        self.file_interface.close()
+        reactor.stop()
 
 class TwistedWebCrawler(WebCrawler):
     HTTP_PORT = 40
@@ -122,20 +129,32 @@ class TwistedWebCrawler(WebCrawler):
 
             return links
 
-        # Callback #2: all links were successfully extracted. For debugging,
+        # Callback: all links were successfully extracted. For debugging,
         # if enabled, print all links that were extracted.
         def display_links(links: list):
-            print(f"<---- {len(links)} links extracted! ---->")
+            if debug:
+                print(f"<---- {len(links)} links extracted! ---->")
 
-            for link in links:
-                print(link)
+                for link in links:
+                    print(link)
 
             return links
 
-        # Callback #2: all links were successfully extracted. Enqueue them
+        # Callback: write all links to the file via
+        # the file interface. Propagate all links for enqueuing
+        # in the next callback.
+        def write_links(links: list):
+            for link in links:
+                assert isinstance(link, str)
+                self.file_interface.append(link)
+
+            return links
+
+        # Callback: all links were successfully extracted. Enqueue them
         # for requests. Pass the number of urls to dequeue to the next callback.
         def enqueue_links(links: list):
             for link in links:
+                print(f"Enqueued {link}")
                 self._url_queue.enqueue(link)
 
             if len(self._url_queue) < max_to_dequeue:
@@ -144,15 +163,29 @@ class TwistedWebCrawler(WebCrawler):
             else:
                 return max_to_dequeue
 
-        # Callback #3: all links were successfully enqueued.
+        # Callback: all links were successfully enqueued.
         # Promise http for all of them.
         def promise_http_multiple(num_to_request: int):
-            
             url_mutable = [None]
 
             for i in range(num_to_request):
                 url_mutable[0] = self._url_queue.dequeue()
                 react(url_mutable)
+
+        # Errback #1: Propogate the KeyboardInterrupt to the shutdown errback
+        def keyboard_interrupt_caught(ki: KeyboardInterrupt):
+            if debug:
+                print("Keyboard interrupt caught.")
+
+            return ki
+
+        # Errback #2: For any given error that's not redirected to its respective
+        # callback, end the program.
+        def shutdown(e: error):
+            self.shutdown()
+
+            if debug:
+                print("Shutting down crawler.")
 
         def react(curr_url_mutable: list):
             ''' Promise http for the url in the mutable list.'''
@@ -162,8 +195,11 @@ class TwistedWebCrawler(WebCrawler):
             d = self._promise_http(curr_url_mutable[0], debug)
             d.addCallback(extract_links_http)
             d.addCallback(display_links)
+            d.addCallback(write_links)
             d.addCallback(enqueue_links)
             d.addCallback(promise_http_multiple)
+            d.addErrback(keyboard_interrupt_caught)
+            d.addErrback(shutdown)
 
         # Check whether the url_criteria is valid when necessary
         if url_criteria and not self._is_valid_url(url_criteria):
@@ -178,72 +214,3 @@ class TwistedWebCrawler(WebCrawler):
         from twisted.internet import reactor
         reactor.callWhenRunning(react, curr_url_mutable)
         reactor.run()
-
-def test_crawl():
-    def test_crawl_criteria(seed: str, url_criteria: str):
-        crawler = TwistedWebCrawler(seed, "bruh.txt")
-        crawler.crawl(True, "https://www.realcanadiansuperstore.ca/")
-
-    def test_crawl_wo_criteria(seed: str):
-        crawler = TwistedWebCrawler(seed, "bruh.txt")
-        crawler.crawl(True)
-
-    url_criterion = r"(?:https://www.realcanadiansuperstore.ca)" + \
-                    r"(?:/[\w%-]+)*" + \
-                    r"(?:/)" + \
-                    r"(?:[\w-]+)?" + \
-                    r"(?:\?(?:[\w%-]+=[\w%-]+)+)?" # still need to add the & between each query param
-
-    url_criterion = r"(?:" + url_criterion + r")"
-
-    test_crawl_criteria("https://www.realcanadiansuperstore.ca/men-s-woven-shacket/p/W4MR053874001_EA", url_criterion)
-    # test_crawl_criteria("https://www.realcanadiansuperstore.ca/search?search-bar=meat", url_criterion)
-    # test_crawl_criteria("https://www.realcanadiansuperstore.ca/search?search-bar=Milk", url_criterion)
-    # test_crawl_wo_criteria("https://www.realcanadiansuperstore.ca/search?search-bar=meat")
-
-# Counters
-num_pass = 0
-num_fail = 0
-
-def test_extraction():
-    # Criterion regex
-    url_criterion = r"(?:https://www.realcanadiansuperstore.ca)" + \
-                    r"(?:/[\w%-]+)*" + \
-                    r"(?:/)" + \
-                    r"(?:[\w-]+)?" + \
-                    r"(?:\?(?:[\w%-]+=[\w%-]+)+)?" # still need to add the & between each query param
-
-    url_criterion = r"(?:" + url_criterion + r")"
-
-    # Testing functions
-    def extract_criteria(url: str, url_criteria: str):
-            ext = PatternExtractor()
-            ext.set_pattern(url_criteria)
-            links = ext.get_matches(url)
-            return links
-
-    ext_crit = lambda url: extract_criteria(url, url_criterion)
-    verify_correct = lambda url: ext_crit(url)[0] == url
-    summary = lambda: print(f"\n<------ Summary ------>\n# Passed: {num_pass}\n# Failed: {num_fail}")
-    
-    def check_url(url: str):
-        if verify_correct(url):
-            print(f"Success: {url} matched correctly.")
-            global num_pass
-            num_pass += 1
-
-        else:
-            print(f"Failure: {url} matched incorrectly.")
-            global num_fail
-            num_fail += 1
-
-    # Test cases
-    check_url("https://www.realcanadiansuperstore.ca/sauce-rib-chicken/p/21184618_EA?source=sptd")
-    summary()
-
-    
-
-if __name__ == "__main__":
-    test_crawl()
-    # test_extraction()
-

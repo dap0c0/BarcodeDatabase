@@ -5,6 +5,8 @@ import re
 import os
 import barcode
 
+# For me, runs only on python 2.7
+
 class BarcodeGenerator(object):
     __metaclass__ = ABCMeta
     MIN_ID_LENGTH = 10
@@ -74,7 +76,7 @@ class UPCBarcodeGenerator(BarcodeGenerator):
     def verify_code(self, code):
         pass
 
-gen = UPCBarcodeGenerator(50)
+# gen = UPCBarcodeGenerator(50)
 # file_path = gen.generate_barcode(u"060383758783", directory="../")
 # file_path = gen.generate_barcode(u"60383758783", directory="")
 #
@@ -83,5 +85,4 @@ gen = UPCBarcodeGenerator(50)
 #
 # # Exceeding max does not lead to error!
 # file_path = gen.generate_barcode(u"160383758783451225")
-# 
 
