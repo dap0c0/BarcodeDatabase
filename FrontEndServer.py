@@ -26,7 +26,7 @@ class SecureResource(Resource, ABC):
         assert isinstance(auth_server_url, str)
         self._auth_server_url = auth_server_url
 
-    def _verify_session(self, request: Request) -> Deferred:
+    def _verify_session(self, request: Request, ) -> Deferred:
         ''' Query the authentication server endpoint and
         attempt to authenticate the current session.
 
@@ -44,9 +44,17 @@ class SecureResource(Resource, ABC):
         d = self._promise_http(api_url, debug=True)
         return d
 
-    def _promise_http(self, url: str, debug: bool=False) -> Deferred:
+    def _promise_http(self,
+                      url: str,
+                      cookies: list,
+                      debug: bool=False,
+                      **kargs) -> Deferred:
             ''' Issue an http request to the ItemServer endpoint 
-                using the given url.'''
+                using the given url.
+                
+                All additional keyword args supplied are to be
+                added as header pairs.
+                '''
             d = Deferred()
 
             # Get relevant information from the url
@@ -69,10 +77,15 @@ class SecureResource(Resource, ABC):
             # The bridge is primarily through callbacks and errbacks added
             # to the deferred at runtime.
             if len(query) == 0:
-                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, None)
+                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, None, kargs)
 
             else:
-                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, query)
+                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, query, kargs)
+
+            # If any cookies are supplied, add them to the
+            # cookie header.
+            for cookie in cookies:
+                factory.add_cookie(key=cookie[0], value=cookie[0])
 
             # Connect to the appropriate port.
             # Upon connection, the factory will delegate work
