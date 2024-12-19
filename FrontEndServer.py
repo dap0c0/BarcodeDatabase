@@ -3,8 +3,11 @@ from ItemServer import ItemProtocol, ItemServer
 from ScryptPasswordDB import ScryptPasswordDB
 from HTTPResponse import HTTPResponse
 from SimpleHTTPFactory import SimpleHTTPFactory
+from AuthServer import AuthServerCookie
 from SessionHandler import SessionHandler
 from twisted.web.server import Site, NOT_DONE_YET, Session
+from twisted.python.components import registerAdapter
+from zope.interface import Interface, Attribute, implementer
 from twisted.web.resource import Resource
 from twisted.web.http import Request
 from twisted.internet.defer import Deferred
@@ -20,6 +23,18 @@ HTTP_PORT = 80
 ITEM_SERVER_HTTPS_PORT = 1931
 SESSION_ID_KEY = b"session_id"
 AUTH_SERVER_URL = "https://localhost:3191/test_auth/"
+
+#----- Cookie persistence -------#
+class ICookie(Interface):
+    value = Attribute("A string value that persists per session")
+
+@implementer(ICookie)
+class Cookie(object):
+    def __init__(self, session):
+        self.value = None
+
+# Allow cookie values to persist across sessions.
+registerAdapter(Cookie, Session, ICookie)
 
 class SecureResource(Resource, ABC):
     def __init__(self, auth_server_url: str):
@@ -48,11 +63,22 @@ class SecureResource(Resource, ABC):
         headers = {}
         headers["Connection"] = "close"
 
+        # If the client has a session cookie,
+        # include that in the request. In a way,
+        # the front-end server acts as a proxy.
+        session = request.getSession()
+        session_id = ICookie(session).value
+        session_cookies = None
+
+        if session_id != None:
+            session_cookies = {}
+            session_cookies[AuthServerCookie.SESSION_COOKIE_NAME] = session_id
+
         if username and password:
             auth_b64 = self._generate_auth_basic(username, password)
             headers["Authorization"] = f"Basic {auth_b64}"
 
-        d = self._promise_http(url=auth_server_url, cookies=None, headers_dict=headers, debug=True)
+        d = self._promise_http(url=auth_server_url, cookies_dict=session_cookies, headers_dict=headers, debug=True)
         return d
 
     def _generate_auth_basic(self,
@@ -67,7 +93,7 @@ class SecureResource(Resource, ABC):
 
     def _promise_http(self,
                       url: str,
-                      cookies: list | None,
+                      cookies_dict: dict | None,
                       headers_dict: dict | None,
                       debug: bool=False
                       ) -> Deferred:
@@ -107,9 +133,9 @@ class SecureResource(Resource, ABC):
 
             # If any cookies are supplied, add them to the
             # cookie header.
-            if cookies:
-                for cookie in cookies:
-                    factory.add_cookie(key=cookie[0], value=cookie[0])
+            if cookies_dict:
+                for key in cookies_dict:
+                    factory.add_cookie(key, cookies_dict[key])
 
             # Connect to the appropriate port.
             # Upon connection, the factory will delegate work
@@ -173,8 +199,9 @@ class LoginPage(SecureResource):
             assert isinstance(token, str)
             assert len(token) > 0
             print(f"Setting session cookie as {token}")
-            request.addCookie(k="session_id", v=token)
-            print(f"Cookies: {request.cookies}")
+            session = request.getSession()
+            ICookie(session).value = token
+            print(f"Cookies: {ICookie(request.getSession()).value}")
 
         # Callback:
         # Redirect the client to the home page.
@@ -207,7 +234,7 @@ class HomePage(SecureResource):
 
     def render_GET(self, request):
         '''Allow user to navigate between search and data addition.'''
-        if self._verify_session(request.getSession()):
+        if self._verify_session(request):
             return f'''<!DOCTYPE html>
                             <html>
                                 <head>
@@ -237,7 +264,7 @@ class SearchPage(SecureResource):
             For all items returned in the search page,
             table them and display hyperlinks to each page.'''
 
-        if self._verify_session(request.getSession()):
+        if self._verify_session(request):
             # If any query paramaters are provided in the
             # url, perform a search using those values.
             try:

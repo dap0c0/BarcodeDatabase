@@ -88,7 +88,6 @@ class AuthServerCookie(AuthServer):
         
         # Check the session_id cookie.
         try:
-            breakpoint()
             session_id = request.getCookie(bytes(AuthServerCookie.SESSION_COOKIE_NAME, "utf-8"))
             print(f"session_id: {session_id}")
 
