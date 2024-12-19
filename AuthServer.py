@@ -113,6 +113,7 @@ class AuthServerCookie(AuthServer):
                 # Supply token to client upon authentication
                 if self._verify_login(str(username, "utf-8"), str(password, "utf-8")):
                     token = self._generate_token()
+                    self._session_handler.add_session(token)
                     print(f"Token generated: {token}")
 
                     # Responses are what observed by the clients

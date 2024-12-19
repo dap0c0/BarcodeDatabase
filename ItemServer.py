@@ -9,7 +9,7 @@ import json
 import html
 
 class ItemProtocol(Resource):
-    ''' HTTP protocol for serving items from the 
+    ''' HTTP protocol for serving items from the
         supplied item database.'''
     isLeaf = True
     ITEM_FORMAT_JSON = {"url": "",
@@ -25,14 +25,11 @@ class ItemProtocol(Resource):
                         "asin": "",
                         "price": ""
                         }
-    SESSION_ID_KEY = b"TWISTED_SECURE_SESSION"
 
-    def __init__(self, file_path, pass_database: ScryptPasswordDB, indents: int=4):
+    def __init__(self, file_path, indents=4):
         Resource.__init__(self)
         self._indents = indents
-        self._pass_database = pass_database
         self._item_database = ItemDatabase(file_path)
-        self._session_handler = SessionHandler()
 
     def render_GET(self, request):
         '''Client must search through URL api as such:
@@ -40,11 +37,6 @@ class ItemProtocol(Resource):
 
         The protocol will return all recursive grep matches
         in json format.'''
-
-        # Upon authentication, ensure that the session id is maintained.
-        print(request.requestHeaders)
-        # if self._authenticate_request(request):
-        #    self._session_handler.add_session(request.getSession())
 
         # Get the value of the search key and parse it for security
         search_arg = request.args[b"search"][0].decode("utf-8")
@@ -77,82 +69,46 @@ class ItemProtocol(Resource):
             "price": "",
         }'''
        
-        if self._authenticate_request(request):
-            # Get the data. Assure that it is json.
-            # If json, ensure that it is the correct format
-            # for submission of data.
-            data = request.content.read()
-            
-            try:
-                data_json = json.loads(data)
+        # Get the data. Assure that it is json.
+        # If json, ensure that it is the correct format
+        # for submission of data.
+        data = request.content.read()
+        
+        try:
+            data_json = json.loads(data)
 
-                if self._check_format_json(data_json):
-                    # Get name of the item
-                    product_name = list(data_json.keys())[0]
+            if self._check_format_json(data_json):
+                # Get name of the item
+                product_name = list(data_json.keys())[0]
 
-                    # Get the values of the item and
-                    # write into the database
-                    values_dict = data_json[product_name]
-                    self._item_database.write_data(product_name=product_name,
-                                                    url=values_dict["url"],
-                                                    brand=values_dict["brand"],
-                                                    flavor=values_dict["flavor"],
-                                                    weight=values_dict["weight"],
-                                                    volume=values_dict["volume"],
-                                                    count=values_dict["count"],
-                                                    company=values_dict["company"],
-                                                    manufacturer=values_dict["manufacturer"],
-                                                    upc=values_dict["upc"],
-                                                    ean=values_dict["ean"],
-                                                    asin=values_dict["asin"],
-                                                    price=values_dict["price"])
-                    return json.dumps(data_json, indent=self._indents).encode("utf-8")
+                # Get the values of the item and
+                # write into the database
+                values_dict = data_json[product_name]
+                self._item_database.write_data(product_name=product_name,
+                                                url=values_dict["url"],
+                                                brand=values_dict["brand"],
+                                                flavor=values_dict["flavor"],
+                                                weight=values_dict["weight"],
+                                                volume=values_dict["volume"],
+                                                count=values_dict["count"],
+                                                company=values_dict["company"],
+                                                manufacturer=values_dict["manufacturer"],
+                                                upc=values_dict["upc"],
+                                                ean=values_dict["ean"],
+                                                asin=values_dict["asin"],
+                                                price=values_dict["price"])
+                return json.dumps(data_json, indent=self._indents).encode("utf-8")
 
-            except json.decoder.JSONDecodeError:
-                pass
+        except json.decoder.JSONDecodeError:
+            pass
 
     #------ Helper functions ---------#
     def _authenticate_request(self, request):
-        ''' If user and password are supplied, compare with
-        hash stored in the password database and return True.
-
-        If no user or password are supplied, compare the TWISTED_SESSION
-        token (session id) with the current token pool.
-        Return True if authenticated.'''
-
-        # Authenticate the user if auth provided
-        auth_header = request.getHeader("Authorization")
-
-        if auth_header:
-            _, b64_token = auth_header.split(" ")
-            username, password = self._decode_basic_auth(b64_token)
-
-            if username != "" and self._pass_database.verify_pass_file(username, password):
-                return True
-
-        # No authorization header provided.
-        # Check session id.
-        else:
-            session_id = request.getCookie(ItemProtocol.SESSION_ID_KEY)
-            print(f"Session id is {session_id}")
-
-            if session_id:
-                return self._session_handler.verify_session(request.getSession())
-
-        # Username, password, and session id all invalid
-        return False
-
-    def _decode_basic_auth(self, token: str) -> tuple:
-        assert isinstance(token, str)
-        ''' Return the username and password from the
-        provided basic auth token.'''
-        token_decoded = base64.b64decode(token)
-        username, password = token_decoded.split(b":")
-        return (str(username, "utf-8"), password)
+        pass
 
     def _check_format_json(self, dictionary: dict):
         ''' Check that the dictionary tables
-        the same values as required by the
+        the same vanues as required by the
         item database.'''
         assert isinstance(dictionary, dict)
         
@@ -213,9 +169,6 @@ class ItemServer(object):
         ssl_endpoint.listen(factory)
         reactor.run()
 
-# Allow authentication through our password database
-pass_db = ScryptPasswordDB()
-
 if __name__ == "__main__":
-    item_server = ItemServer(ItemProtocol("test_file.json", pass_db))
+    item_server = ItemServer(ItemProtocol("test_file.json"))
     item_server.run_https(cert_file="crt.pem", key_file="key.pem")

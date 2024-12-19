@@ -93,8 +93,8 @@ class SecureResource(Resource, ABC):
 
     def _promise_http(self,
                       url: str,
-                      cookies_dict: dict | None,
-                      headers_dict: dict | None,
+                      cookies_dict: dict=None,
+                      headers_dict: dict=None,
                       debug: bool=False
                       ) -> Deferred:
             ''' Issue an http request to the ItemServer endpoint 
@@ -234,8 +234,22 @@ class HomePage(SecureResource):
 
     def render_GET(self, request):
         '''Allow user to navigate between search and data addition.'''
-        if self._verify_session(request):
-            return f'''<!DOCTYPE html>
+        d = self._verify_session(request)
+
+        # Callback:
+        # display content of response for debugging.
+        # If the auth server's response is empty,
+        # authentication failed.
+        def print_response(http_response: HTTPResponse):
+            reactor.callWhenRunning(print, f"Response is {http_response}")
+            assert len(http_response) > 0
+            return str(http_response) # Push the content of the response
+
+        # Callback:
+        # Token has been authenticated! Display the
+        # page html to the client.
+        def render_page(data: str):
+            request.write(f'''<!DOCTYPE html>
                             <html>
                                 <head>
                                     <meta charset='utf-8'>
@@ -253,7 +267,21 @@ class HomePage(SecureResource):
                                         {self._generate_link("Login", "/login")}
                                     </div>
                                 </body>
-                            </html>'''.encode("utf-8")
+                            </html>'''.encode("utf-8"))
+            request.finish()
+
+        # Errback:
+        # authentication has failed! Redirect the client
+        # to the login page.
+        def redirect_login(err):
+            print(f"Redirecting login!")
+            request.redirect(url="http://localhost/login")
+            request.finish()
+
+        d.addCallback(print_response)
+        d.addCallback(render_page)
+        d.addErrback(redirect_login)
+        return NOT_DONE_YET
 
 class SearchPage(SecureResource):
     def render_GET(self, request):
@@ -264,55 +292,80 @@ class SearchPage(SecureResource):
             For all items returned in the search page,
             table them and display hyperlinks to each page.'''
 
-        if self._verify_session(request):
-            # If any query paramaters are provided in the
-            # url, perform a search using those values.
-            try:
-                search_query = request.args[b"search"][0].decode("utf-8")
-                search_query = html.escape(search_query)
+        # Callback:
+        # Display content of response for debugging.
+        # If the auth server's response is empty,
+        # authentication failed.
+        def print_response(http_response: HTTPResponse):
+            reactor.callWhenRunning(print, f"Response is {http_response}")
+            assert len(http_response) > 0
+            return str(http_response) # Push the content of the response
 
-            except:
-                to_render = f'''<!DOCTYPE HTML>
-                                <html>
-                                    <head>
-                                        <meta charset='utf-8'>
-                                        <title>
-                                            Search
-                                        </title>
-                                    </head>
-                                    <body>
-                                        <form method="GET">
-                                            <div>
-                                                <input type="text" name="search" placeholder="Search..."/>
-                                            </div>
-                                            <div>
-                                                <button type="submit"></button>
-                                            </div>
-                                        </form>
-                                    </body>
-                                </html>'''
-                return to_render.encode("utf-8")
+        # Errback:
+        # Authentication has failed! Redirect the client
+        # to the login page.
+        def redirect_login(err):
+            print(f"Redirecting login!")
+            request.redirect(url="http://localhost/login")
+            request.finish()
 
-            else:
+        # Callback:
+        # Check whether there was a query sent
+        # in the request.
+        def check_query(http_response: HTTPResponse):
+            search_query = request.args[b"search"][0].decode("utf-8")
+            search_query = html.escape(search_query)
+            return search_query
 
-                # Query the item server to perform a recursive search
-                # api_url = f"https://localhost:1931/?search={search_query}"
-                # d = self._promise_http(api_url, debug=True)
-                # d.addCallback(write_response)
-                # return NOT_DONE_YET
-                pass
-            
-        def _react(self, url: str, debug: bool=False):
-            def display_json(data: bytes):
-                print(data)
+        # Errback:
+        # Token has been authenticated! Display the
+        # page html to the client.
+        def render_page(_):
+            to_render = f'''<!DOCTYPE HTML>
+                            <html>
+                                <head>
+                                    <meta charset='utf-8'>
+                                    <title>
+                                        Search
+                                    </title>
+                                </head>
+                                <body>
+                                    <form method="GET">
+                                        <div>
+                                            <input type="text" name="search" placeholder="Search..."/>
+                                        </div>
+                                        <div>
+                                            <button type="submit"></button>
+                                        </div>
+                                    </form>
+                                </body>
+                            </html>'''
+            request.write(to_render.encode("utf-8"))
+            request.finish()
 
-            d = self._promise_http(url, debug)
-            d.addCallback(display_json)
+        # Callback:
+        # Query the item server to perform a recursive search
+        def search_database(search_query: str):
+            def display_json(http_response: HTTPResponse):
+                request.write(bytes(http_response.content, "utf-8"))
+                request.finish()
+
+            print(f"Search query: {search_query}")
+
+            if search_query != None:
+                api_url = f"https://localhost:1931/?search={search_query}"
+                headers = {}
+                headers["Connection"] = "close"
+                d = self._promise_http(api_url, headers_dict=headers, debug=True)
+                d.addCallback(display_json)
+
+        d = self._verify_session(request)
+        d.addCallback(print_response)
+        d.addCallbacks(check_query, redirect_login)
+        d.addCallbacks(search_database, render_page)
+        return NOT_DONE_YET
 
 if __name__ == "__main__":
-    # Upon successful authentication, provide the user with a
-    # session id.
-
     # Construct the web tree
     root = Resource()
     root.putChild(b"login", LoginPage(AUTH_SERVER_URL))
