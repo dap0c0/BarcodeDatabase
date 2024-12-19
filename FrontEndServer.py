@@ -26,7 +26,12 @@ class SecureResource(Resource, ABC):
         assert isinstance(auth_server_url, str)
         self._auth_server_url = auth_server_url
 
-    def _verify_session(self, request: Request, ) -> Deferred:
+    def _verify_session(self,
+                        request: Request,
+                        username: str=None,
+                        password: str=None,
+                        auth_server_url=AUTH_SERVER_URL
+                        ) -> Deferred:
         ''' Query the authentication server endpoint and
         attempt to authenticate the current session.
 
@@ -40,18 +45,35 @@ class SecureResource(Resource, ABC):
         If verification fails, no bytes will be returned.
         '''
         # Query the item server to perform a recursive search
-        api_url = AUTH_SERVER_URL
-        d = self._promise_http(api_url, debug=True)
+        headers = {}
+        headers["Connection"] = "close"
+
+        if username and password:
+            auth_b64 = self._generate_auth_basic(username, password)
+            headers["Authorization"] = f"Basic {auth_b64}"
+
+        d = self._promise_http(url=auth_server_url, cookies=None, headers_dict=headers, debug=True)
         return d
+
+    def _generate_auth_basic(self,
+                             username: str,
+                             password: str) -> str:
+        ''' Generate the base64 token of
+        "<username>:<password>"'''
+        assert isinstance(username, str)
+        assert isinstance(password, str)
+        temp = f"{username}:{password}"
+        return base64.b64encode(bytes(temp, "utf-8")).decode("utf-8")
 
     def _promise_http(self,
                       url: str,
-                      cookies: list,
-                      debug: bool=False,
-                      **kargs) -> Deferred:
+                      cookies: list | None,
+                      headers_dict: dict | None,
+                      debug: bool=False
+                      ) -> Deferred:
             ''' Issue an http request to the ItemServer endpoint 
                 using the given url.
-                
+                         a
                 All additional keyword args supplied are to be
                 added as header pairs.
                 '''
@@ -72,20 +94,22 @@ class SecureResource(Resource, ABC):
             # dns lookup errors.
             if len(host.split(":")) == 2:
                 host, port = host.split(":")
+                port = int(port)
 
             # Allow factory to bridge between main code and the reactor loop.
             # The bridge is primarily through callbacks and errbacks added
             # to the deferred at runtime.
             if len(query) == 0:
-                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, None, kargs)
+                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, None, headers_dict)
 
             else:
-                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, query, kargs)
+                factory = SimpleHTTPFactory(d, url, scheme, host, path, debug, query, headers_dict)
 
             # If any cookies are supplied, add them to the
             # cookie header.
-            for cookie in cookies:
-                factory.add_cookie(key=cookie[0], value=cookie[0])
+            if cookies:
+                for cookie in cookies:
+                    factory.add_cookie(key=cookie[0], value=cookie[0])
 
             # Connect to the appropriate port.
             # Upon connection, the factory will delegate work
@@ -132,17 +156,48 @@ class LoginPage(SecureResource):
         username = html.escape(username)
         password = request.args[b"password"][0].decode("utf-8")
         password = html.escape(password)
-        print(username, password)
+        
+        # Callback:
+        # display content of response for debugging.
+        # If the auth server's response is empty,
+        # authentication failed.
+        def print_response(http_response: HTTPResponse):
+            reactor.callWhenRunning(print, f"Response is {http_response}")
+            assert len(http_response) > 0
+            return str(http_response) # Push the content of the response
 
+        # Callback:
+        # Authentication has passed! Set the token
+        # as session_id for the client.
+        def set_session_cookie(token: str):
+            assert isinstance(token, str)
+            assert len(token) > 0
+            print(f"Setting session cookie as {token}")
+            request.addCookie(k="session_id", v=token)
+            print(f"Cookies: {request.cookies}")
+
+        # Callback:
+        # Redirect the client to the home page.
+        def redirect_home(data: object):
+            request.redirect(url="http://localhost/home")
+            request.finish()
+
+        # Errback:
+        # authentication has failed! Redirect the client
+        # to the login page.
+        def redirect_login(err):
+            print(f"Redirecting login!")
+            request.redirect(url="http://localhost/login")
+            request.finish()
+            
         # Verify that the parameters are correct.
         # If so, add the session id to our handler.
-        mutable = []
-        d = self._verify_session(request)
-        d.addCallback(lambda data,)
-
-        return redirectTo(b"home", request)
-        # else:
-        # return redirectTo(b"login", request)
+        d = self._verify_session(request, username, password)
+        d.addCallback(print_response)
+        d.addCallback(set_session_cookie)
+        d.addCallback(redirect_home)
+        d.addErrback(redirect_login)
+        return NOT_DONE_YET
 
 class HomePage(SecureResource):
     def _generate_link(self, link_text: str, redirect: str):
