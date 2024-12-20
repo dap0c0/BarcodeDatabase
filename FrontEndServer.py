@@ -283,14 +283,104 @@ class HomePage(SecureResource):
         d.addErrback(redirect_login)
         return NOT_DONE_YET
 
+class BarcodeBruteforcerPage(SecureResource):
+    def _generate_html(self):
+        to_render = f'''<!DOCTYPE HTML>
+                        <html>
+                            <head>
+                                <meta charset='utf-8'>
+                                <title>
+                                    Search
+                                </title>
+                            </head>
+                            <body>
+                                <form method="POST">
+                                    <div>
+                                        <input type="text" name="upc_barcode" placeholder="UPC Barcode..."/>
+                                    </div>
+                                    <div>
+                                        <button type="submit"></button>
+                                    </div>
+                                </form>
+                            </body>
+                        </html>'''
+        return to_render
+
+    def render_GET(self, request: Request):
+        ''' Allow the user to input a UPC barcode (12 digits),
+        with an x signifying a missing digit.'''
+
+        # Callback
+        # Check that the token is valid.
+        # The auth server echoes the token
+        # if the client is authenticated.
+        def check_token(http_response: HTTPResponse):
+            assert len(http_response) > 0
+            return str(http_response)
+
+        # Callback
+        # Display the page to the user!
+        def render_page(_):
+            html = self._generate_html()
+            request.write(html.encode("utf-8"))
+            request.finish()
+
+        # Errback
+        # The client isn't authenticated!
+        # Redirect them to the login page
+        def redirect_login(err):
+            print(f"Redirecting login!")
+            request.redirect(url="http://localhost/login")
+            request.finish()
+            
+        d = self._verify_session(request)
+        d.addCallback(check_token)
+        d.addCallbacks(render_page, redirect_login)
+        return NOT_DONE_YET
+        
+   def render_POST(self, request: Request):
+        ''' With the inputted UPC barcode (11 digits with x),
+        dynamically generate all barcodes and display on the page.'''
+
+
+        # Callback
+        # Check that the token is valid.
+        # The auth server echoes the token
+        # if the client is authenticated.
+        def check_token(http_response: HTTPResponse):
+            assert len(http_response) > 0
+            return str(http_response)
+
+        # Callback
+        # Display the page to the user!
+        def render_page(_):
+            html = self._generate_html()
+            request.write(html.encode("utf-8"))
+            request.finish()
+
+        # Errback
+        # The client isn't authenticated!
+        # Redirect them to the login page
+        def redirect_login(err):
+            print(f"Redirecting login!")
+            request.redirect(url="http://localhost/login")
+            request.finish()
+
+        d = self._verify_session(request)
+        d.addCallback(check_token)
+        d.addCallbacks(render_page, redirect_login)
+        return NOT_DONE_YET
+        
+ 
 class SearchPage(SecureResource):
-    def render_GET(self, request):
+    def render_GET(self, request: Request):
         ''' Allow the user to input information
             into a search bar to perform
             a recursive grep search.
 
             For all items returned in the search page,
             table them and display hyperlinks to each page.'''
+
 
         # Callback:
         # Display content of response for debugging.
