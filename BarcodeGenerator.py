@@ -28,6 +28,20 @@ class BarcodeGenerator(object):
     def verify_code(self, code):
         pass
 
+    def write(self, code, io):
+        ''' Generate the barcode image in svg format.
+        Write it into the io stream.'''
+        assert isinstance(code, unicode)
+        assert io != None
+
+        # Instantiate the driver
+        assert self.barcode_class != None, "Barcode Class not instantianted"
+        temp = self.barcode_class(code)
+        temp.build()
+
+        # Write into the stream
+        temp.write(io)
+        
     def generate_barcode(self, code, directory="./"):
         ''' Generate the barcode image in svg.
         Returns the name of the file, which is randomly
