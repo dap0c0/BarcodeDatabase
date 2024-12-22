@@ -1,10 +1,13 @@
 from abc import ABC, abstractmethod
+from typing import Pattern
 from ItemServer import ItemProtocol, ItemServer
 from ScryptPasswordDB import ScryptPasswordDB
 from HTTPResponse import HTTPResponse
 from SimpleHTTPFactory import SimpleHTTPFactory
 from AuthServer import AuthServerCookie
 from SessionHandler import SessionHandler
+from BarcodeGenerator import UPCBarcodeGenerator
+from PatternExtractor import PatternExtractor
 from twisted.web.server import Site, NOT_DONE_YET, Session
 from twisted.python.components import registerAdapter
 from zope.interface import Interface, Attribute, implementer
@@ -18,6 +21,7 @@ from twisted.web.util import redirectTo
 import urllib.parse
 import html
 import base64
+import io
 
 HTTP_PORT = 80
 ITEM_SERVER_HTTPS_PORT = 1931
@@ -266,6 +270,9 @@ class HomePage(SecureResource):
                                     <div>
                                         {self._generate_link("Login", "/login")}
                                     </div>
+                                    <div>
+                                        {self._generate_link("Barcode Bruteforcer", "/barcode_bruteforcer")}
+                                    </div>
                                 </body>
                             </html>'''.encode("utf-8"))
             request.finish()
@@ -284,6 +291,12 @@ class HomePage(SecureResource):
         return NOT_DONE_YET
 
 class BarcodeBruteforcerPage(SecureResource):
+    def __init__(self,
+                 auth_server_url: str):
+        SecureResource.__init__(self, auth_server_url)
+        self._bc_generator = UPCBarcodeGenerator(50, add_checksum=True)
+        self._pat_extractor = PatternExtractor()
+
     def _generate_html(self):
         to_render = f'''<!DOCTYPE HTML>
                         <html>
@@ -338,27 +351,96 @@ class BarcodeBruteforcerPage(SecureResource):
         d.addCallbacks(render_page, redirect_login)
         return NOT_DONE_YET
         
-   def render_POST(self, request: Request):
+    def render_POST(self, request: Request):
         ''' With the inputted UPC barcode (11 digits with x),
         dynamically generate all barcodes and display on the page.'''
 
-
         # Callback
-        # Check that the token is valid.
+        # Check that the authentication token is valid.
         # The auth server echoes the token
         # if the client is authenticated.
         def check_token(http_response: HTTPResponse):
             assert len(http_response) > 0
             return str(http_response)
 
-        # Callback
-        # Display the page to the user!
+        # Callback:
+        # Verify that the client input is valid!
+        # The barcode must be 12 digits total
+        # (including the x).
+        def check_input(_):
+            upc_barcode = request.args[b"upc_barcode"][0].decode("utf-8")
+            
+            # Check length of the input
+            assert len(upc_barcode) == 12
+
+            # Verify the input charset
+            valid_pattern = r"(?:\d*[xX]*\d*)"
+            self._pat_extractor.set_pattern(valid_pattern)
+            print(f"Matches: {self._pat_extractor.get_matches(upc_barcode)}")
+            assert len(self._pat_extractor.get_matches(upc_barcode)) != 0
+
+            # All checks passed! Bubble upc_barcode
+            # for further processing
+            return upc_barcode
+
+        # Errback:
+        # The input is invalid! Force the user
+        # to reinput their barcode.
         def render_page(_):
             html = self._generate_html()
             request.write(html.encode("utf-8"))
             request.finish()
 
-        # Errback
+        # Callback:
+        # Display all possible barcodes on the page.
+        # E.g, for 012345x23450, display the barcodes of
+        # 012345023450, 012345123450, ...
+        def render_barcodes(upc_barcode: str):
+            if upc_barcode != None:
+
+                def find_char(string: str, charset: list):
+                    i = 0
+                    
+                    for c in upc_barcode:
+                        if c in charset:
+                            return i
+
+                        i += 1
+                    return None
+
+                # Locate index of x
+                x_index = find_char(upc_barcode, ["x", "X"])
+
+                # Write all barcodes into streams
+                streams = []
+
+                for i in range(10):
+                    stream = io.BytesIO()
+                    curr_barcode = upc_barcode[:x_index] + str(i) + upc_barcode[x_index + 1:]
+                    print(f"Curr Barcode is {curr_barcode}")
+                    self._bc_generator.write(curr_barcode, stream)
+                    streams.append(stream)
+
+                # Render them all onto the page
+                to_render = f'''<!DOCTYPE HTML>
+                                <html>
+                                    <head>
+                                        <meta charset='utf-8'>
+                                        <title>
+                                        </title>
+                                    </head>
+                                    <body>'''
+                
+                for stream in streams:
+                    to_render += str(stream.getvalue(), "utf-8")
+                    stream.close()
+
+                to_render += '''<body>
+                            </html>'''
+                request.write(to_render.encode("utf-8"))
+                request.finish()
+
+        # Errback:
         # The client isn't authenticated!
         # Redirect them to the login page
         def redirect_login(err):
@@ -368,7 +450,8 @@ class BarcodeBruteforcerPage(SecureResource):
 
         d = self._verify_session(request)
         d.addCallback(check_token)
-        d.addCallbacks(render_page, redirect_login)
+        d.addCallbacks(check_input, redirect_login)
+        d.addCallbacks(render_barcodes, render_page)
         return NOT_DONE_YET
         
  
@@ -461,6 +544,7 @@ if __name__ == "__main__":
     root.putChild(b"login", LoginPage(AUTH_SERVER_URL))
     root.putChild(b"home", HomePage(AUTH_SERVER_URL))
     root.putChild(b"search", SearchPage(AUTH_SERVER_URL))
+    root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage(AUTH_SERVER_URL))
 
     # Serve the web tree
     factory = Site(root)

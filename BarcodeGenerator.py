@@ -1,5 +1,4 @@
 from abc import ABCMeta, abstractmethod
-from StringIO import StringIO
 import random
 import re
 import os
@@ -16,10 +15,12 @@ class BarcodeGenerator(object):
                     "0123456789" + \
                     "_-"
 
-    def __init__(self, id_length):
+    def __init__(self, id_length, add_checksum):
         assert isinstance(id_length, int)
         assert id_length > 0
         self.id_length = id_length
+        self.add_checksum = add_checksum
+        self.options = dict(add_checksum=self.add_checksum)
 
         # Barcode class will be overridden by children
         self.barcode_class = None
@@ -31,16 +32,16 @@ class BarcodeGenerator(object):
     def write(self, code, io):
         ''' Generate the barcode image in svg format.
         Write it into the io stream.'''
-        assert isinstance(code, unicode)
         assert io != None
 
         # Instantiate the driver
         assert self.barcode_class != None, "Barcode Class not instantianted"
+        print(f"Code is {code}")
+        print(f"Options is {self.options}")
         temp = self.barcode_class(code)
-        temp.build()
 
         # Write into the stream
-        temp.write(io)
+        temp.write(io, options=self.options)
         
     def generate_barcode(self, code, directory="./"):
         ''' Generate the barcode image in svg.
@@ -48,7 +49,6 @@ class BarcodeGenerator(object):
         generated.
 
         Place the svg file into the supplied directory'''
-        assert isinstance(code, unicode)
         assert isinstance(directory, str)
 
         # Instantiate the driver
@@ -60,31 +60,29 @@ class BarcodeGenerator(object):
         # directory.
         file_id = self._generate_image_id()
         file_id = directory + file_id
-        filename = temp.save(file_id)
+        filename = temp.save(file_id, options=self.options)
         return filename
 
     def _generate_image_id(self):
         ''' Generate a random base64 id of length self.id_length.'''
-        buffer = StringIO()
+        result = ""
 
         for i in range(self.id_length):
-            buffer.write(random.choice(BarcodeGenerator.BASE64_CHARS))
+            result += random.choice(BarcodeGenerator.BASE64_CHARS)
 
-        result = buffer.getvalue()
-        buffer.close()
         return result
 
 class EANBarcodeGenerator(BarcodeGenerator):
-    def __init__(self, id_length):
-        BarcodeGenerator().__init__(id_length)
+    def __init__(self, id_length, add_checksum=False):
+        BarcodeGenerator().__init__(id_length, add_checksum)
         self.barcode_class = barcode.get_barcode_class("ean")
 
     def verify_code(self, code):
         pass
 
 class UPCBarcodeGenerator(BarcodeGenerator):
-    def __init__(self, id_length):
-        BarcodeGenerator.__init__(self, id_length)
+    def __init__(self, id_length, add_checksum=False):
+        BarcodeGenerator.__init__(self, id_length, add_checksum)
         self.barcode_class = barcode.get_barcode_class("upc")
 
     def verify_code(self, code):
