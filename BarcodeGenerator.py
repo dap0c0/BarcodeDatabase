@@ -36,8 +36,6 @@ class BarcodeGenerator(object):
 
         # Instantiate the driver
         assert self.barcode_class != None, "Barcode Class not instantianted"
-        print(f"Code is {code}")
-        print(f"Options is {self.options}")
         temp = self.barcode_class(code)
 
         # Write into the stream
