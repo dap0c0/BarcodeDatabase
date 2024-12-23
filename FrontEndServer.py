@@ -25,7 +25,7 @@ import io
 
 HTTP_PORT = 80
 ITEM_SERVER_HTTPS_PORT = 1931
-SESSION_ID_KEY = b"session_id"
+SESSION_ID_KEY = AuthServerCookie.SESSION_COOKIE_NAME
 AUTH_SERVER_URL = "https://localhost:3191/test_auth/"
 
 #----- Cookie persistence -------#
@@ -115,7 +115,13 @@ class SecureResource(Resource, ABC):
             host = parsed.netloc
             path = parsed.path
             query = parsed.query
-            port = ITEM_SERVER_HTTPS_PORT
+
+            # Set default ports before checking netloc
+            if scheme == "http":
+                port = 80
+
+            elif scheme == "https":
+                port = 443
 
             if len(path) == 0:
                 path = "/"
@@ -294,7 +300,7 @@ class BarcodeBruteforcerPage(SecureResource):
     def __init__(self,
                  auth_server_url: str):
         SecureResource.__init__(self, auth_server_url)
-        self._bc_generator = UPCBarcodeGenerator(50, add_checksum=True)
+        self._bc_generator = UPCBarcodeGenerator(50, add_checksum=False)
         self._pat_extractor = PatternExtractor()
 
     def _generate_html(self):
@@ -417,7 +423,6 @@ class BarcodeBruteforcerPage(SecureResource):
                 for i in range(10):
                     stream = io.BytesIO()
                     curr_barcode = upc_barcode[:x_index] + str(i) + upc_barcode[x_index + 1:]
-                    print(f"Curr Barcode is {curr_barcode}")
                     self._bc_generator.write(curr_barcode, stream)
                     streams.append(stream)
 
@@ -529,7 +534,14 @@ class SearchPage(SecureResource):
                 api_url = f"https://localhost:1931/?search={search_query}"
                 headers = {}
                 headers["Connection"] = "close"
-                d = self._promise_http(api_url, headers_dict=headers, debug=True)
+                cookies = {}
+                session_cookie = ICookie(request.getSession()).value
+                cookies[SESSION_ID_KEY] = session_cookie
+                print(f"Cookies are {cookies}")
+                d = self._promise_http(api_url,
+                                       cookies_dict=cookies,
+                                       headers_dict=headers,
+                                       debug=True)
                 d.addCallback(display_json)
 
         d = self._verify_session(request)
