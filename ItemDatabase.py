@@ -1,23 +1,40 @@
 import json
 import re
 
-# Compatible with Python 2.7 and Python3.13
-
-def pretty_print(dictionary, indent_spaces):
-    assert isinstance(dictionary, dict)
-    assert isinstance(indent_spaces, int)
-    json_formatted = json.dumps(dictionary, indent=indent_spaces)
-    print(json_formatted)
-
 #--------- Basic data manipulation ------- #
 class ItemDatabase():
     INDENT_SPACES = 4
     INVALID_CHARS = "{}[]()<>^"
     MAX_REGEX_SIZE = 500
+    
+    DEFAULT_JSON_TEMPLATE = {
+            "product_title": "",
+            "product_brand": "",
+            "product_url": "",
+            "product_id": "",
+            "product_package_size": "",
+            "price_descriptor": "",
+            "prices": {
+                "regular_price": "",
+                "sale_price": "",
+                "mop_price": "",
+                "non_member_price": "",
+                "before_price": ""
+                    },
+            "codes": {
+                "upc": "",
+                "ean": "",
+                "plu": ""
+                }
+            }
 
-    def __init__(self, file_path):
+    def __init__(self,
+                 file_path: str,
+                 json_format: dict=DEFAULT_JSON_TEMPLATE):
         assert isinstance(file_path, str)
-        self.file_path = file_path
+        assert isinstance(json_format, dict)
+        self._file_path = file_path
+        self._json_format = json_format
 
     def _check_valid_regex(self, regex):
         ''' Check whether the regex string
@@ -74,6 +91,48 @@ class ItemDatabase():
 
         return matches
 
+    def search_matches(self, regex):
+        '''
+        Search through all dictionary items to find match.
+        Return json of all items that match.
+        '''
+        assert isinstance(regex, str)
+
+        # If file does not exist, bubble exception.
+        with open(self._file_path, "r") as rfile:
+            if not self._check_valid_regex(regex):
+                raise re.error("Invalid regex.")
+        
+            # Start matching by iterating through each item.
+            # If the string is present in the item
+            # title, return the entire item. If the string is present
+            # as a key value of the item, return the entire item.
+            items_dict = json.load(rfile)
+            pattern_str = ".*%s.*" % regex
+            pattern_compiled = re.compile(pattern_str, re.IGNORECASE)
+            matches = {}
+
+            for item_title in items_dict:
+                item_title = str(item_title)
+                match = pattern_compiled.search(item_title)
+
+                # Append the json to matches
+                if match:
+                    matches[item_title] = items_dict[item_title]
+
+                # String not in title! Search the item's values instead.
+                else:
+                    item = items_dict[item_title]
+                    
+                    for key in item:
+                        value = item[key]
+                        match = pattern_compiled.search(value)
+
+                        if match:
+                            matches[item_title] = items_dict[item_title]
+
+        return matches
+
     def search_matches_iterative(self, regex):
         ''' Search through all dictionary items to find matches
         iteratively.'''
@@ -84,7 +143,7 @@ class ItemDatabase():
         tokens = regex.split(" ")
         curr_dict = {}
 
-        with open(self.file_path, "r") as rfile:
+        with open(self._file_path, "r") as rfile:
             curr_dict = json.load(rfile)
             
         # Make sure that each token is a valid for search
@@ -131,94 +190,76 @@ class ItemDatabase():
                 raise re.error(f"Invalid regex {regex}")
 
         # Place the items dictionary into memory for search
-        with open(self.file_path, "r") as rfile:
+        with open(self._file_path, "r") as rfile:
             items_dict = json.load(rfile)
 
         return search_driver(tokens, items_dict)
 
     def write_data(self,
-                product_name,
-                url="",
-                brand="",
-                flavor="",
-                weight="",
-                volume="",
-                count="",
-                company="",
-                manufacturer="",
-                upc="",
-                ean="",
-                asin="",
-                price="",
-                indent_spaces=INDENT_SPACES):
+                    identifier: str,
+                    data: dict,
+                    indent_spaces: int=INDENT_SPACES):
         ''' Write data to the supplied file path.
-
             In the supplied file (which acts as a semi-database/table),
             items will always be stored by their product title.'''
+        # Verify that the data dictionary follows the
+        # established json template at initialization.
+        if self._verify_dict(data):
+            # If file does not exist, bubble exception
+            with open(self._file_path, "r+") as rwfile:
+                values_dict = json.load(rwfile)
+                
+                # Update the original values dictionary
+                values_dict[identifier] = data
+                
+                # Rewrite the dictionary into the file
+                rwfile.seek(0)
+                json.dump(values_dict, rwfile, indent=indent_spaces)
+        
+    def _verify_dict(self,
+                    dictionary: dict) -> bool:
+        ''' Verify that <json_data> has the same
+        key template as the template established
+        upon initialization.'''
+        assert isinstance(dictionary, dict)
+        
+        # Verify that the keys match in
+        # both dictionaries and that
+        # the class of each respective key
+        # is equal.
+        def verify_dict(dict_a: dict,
+                         dict_b: dict) -> bool:
+            a_items = dict_a.items()
+            b_items = dict_b.items()
 
-        # Construct dictionary iteratively.
-        # If alternating arguments, always skip self,
-        # product_name, indent_spaces.
-        inputted_json = locals()
-        inputted_json.pop("self")
-        inputted_json.pop("product_name")
-        inputted_json.pop("indent_spaces")
+            # Check length
+            if len(a_items) != len(b_items):
+                return False
 
-        # If file does not exist, bubble exception
-        with open(self.file_path, "r+") as rwfile:
-            values_dict = json.load(rwfile)
-            
-            # Update the original values dictionary
-            values_dict[product_name] = inputted_json
-            
-            # Rewrite the dictionary into the file
-            rwfile.seek(0)
-            json.dump(values_dict, rwfile, indent=indent_spaces)
+            # Compare item by item
+            for a_item in a_items:
+                a_key, a_value = a_item
 
-#-------------- Test code ----------------#
-def test():
-    db = ItemDatabase("test_file.json")
+                # Check that the keys are exact
+                if a_key not in dict_b.keys():
+                    return False
+                
+                # Check that each key's respective
+                # value's class are equal.
+                b_value = dict_b[a_key]
 
-    def test_write_data():
-        db.write_data("Oreos")
-        db.write_data("Oreos party pack")
-        db.write_data("Oreos White")
-        db.write_data("Oreos white")
-        db.write_data("OREOS WHITE")
-        db.write_data("Real Canadian Water", volume="500mL", upc="060383013422")
+                if a_value.__class__ != b_value.__class__:
+                    return False
 
-    def test_search_single():
-        print("\nSingle search test")
-        search = lambda db, regex: db.search_matches(regex)
-        matches = search(db, "water")
-        pretty_print(matches, db.INDENT_SPACES)
+                # In the event that the values are
+                # dictionaries, check all values inside.
+                if isinstance(a_value, dict) and isinstance(b_value, dict):
+                    return verify_dict(a_value, b_value)
 
-    def test_search_iterative():
-        print("\n---------------Iterative search test-------------")
-        search = lambda db, regex: db.search_matches_iterative(regex)
-        search_print = lambda db, regex: pretty_print(search(db, regex), db.INDENT_SPACES)
-        # search_print(db, "water")
-        search_print(db, "500 water canadian real")
-        search_print(db, "pack oreos")
+            # Dictionaries are equal
+            # key wise and class of value wise.
+            return True
 
-    def test_search_recursive():
-        print("\n\n------------ Recursive search test ------------")
-        search = lambda db, regex: db.search_matches_recursive(regex)
-        search_print = lambda db, regex: pretty_print(search(db, regex), db.INDENT_SPACES)
-        search_print(db, "500 water canadian real")
-        search_print(db, "pack oreos")
-
-    def test_cleaning():
-        print(db._clean_whitespace("hello there"))
-        print(db._clean_whitespace("  hello  there"))
-        print(db._clean_whitespace("  hello         there   "))
-        print(db._clean_whitespace("\n  hello   \r\n\r\n\t\n there \n    \r\n"))
-
-    # test_write_data()
-    test_search_single()
-    test_search_iterative()
-    test_search_recursive()
-    # test_cleaning()
-
-if __name__ == "__main__":
-    test()
+        # Begin recursion. Dictionaries are self similiar:
+        # it is possible to store a dictionary within itself.
+        return verify_dict(self._json_format, dictionary)
