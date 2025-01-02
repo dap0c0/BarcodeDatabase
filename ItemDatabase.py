@@ -1,5 +1,6 @@
 import json
 import re
+import os.path
 
 #--------- Basic data manipulation ------- #
 class ItemDatabase():
@@ -34,7 +35,24 @@ class ItemDatabase():
         assert isinstance(file_path, str)
         assert isinstance(json_format, dict)
         self._file_path = file_path
+        self._handle_file(file_path)
+        assert os.path.exists(file_path)
         self._json_format = json_format
+
+    def _handle_file(self,
+                     file_path: str):
+        ''' Handle errors in file.'''
+        # Check if the file exists but the
+        # format is incorrect.
+        if os.path.exists(file_path):
+            with open(file_path, "r+") as rfile:
+                if rfile.read().strip() == "":
+                    rfile.write("{}")
+            
+        # Create the file if necessary.
+        if not os.path.exists(file_path):
+            with open(file_path, "w+") as wfile:
+                wfile.write("{}")
 
     def _check_valid_regex(self, regex):
         ''' Check whether the regex string
@@ -198,7 +216,7 @@ class ItemDatabase():
     def write_data(self,
                     identifier: str,
                     data: dict,
-                    indent_spaces: int=INDENT_SPACES):
+                   indent_spaces: int=INDENT_SPACES) -> bool:
         ''' Write data to the supplied file path.
             In the supplied file (which acts as a semi-database/table),
             items will always be stored by their product title.'''
@@ -215,6 +233,9 @@ class ItemDatabase():
                 # Rewrite the dictionary into the file
                 rwfile.seek(0)
                 json.dump(values_dict, rwfile, indent=indent_spaces)
+                return True
+
+        return False
         
     def _verify_dict(self,
                     dictionary: dict) -> bool:
