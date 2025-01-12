@@ -1,17 +1,21 @@
 #! /opt/homebrew/bin/python3.11
 from playwright.sync_api import sync_playwright
-from RealCanadianPageIterator import RealCanadianPageIteratorSync
+from playwright.async_api import async_playwright
+from RealCanadianPageIterator import RealCanadianPageIteratorSync, RealCanadianPageIteratorAsync
 import argparse
+import asyncio
+import time
 
-FOOD_PAGE_URL = "https://www.realcanadiansuperstore.ca/en/food/c/27985/"
+FOOD_PAGE_URL = "https://www.realcanadiansuperstore.ca/en/food/c/27985"
 
 if __name__ == "__main__":
     # Get the filename and root/seed
     # url from the cmd line.
     parser = argparse.ArgumentParser(description="Basic iterative webscraper for the Real" + \
                                      "Canadian Superstore website")
-    # parser.add_argument("-f", "--file", action="store", dest="file", required=True, type=str)
+    parser.add_argument("--uri", "-u", action="store", dest="uri", type=str, required=True)
     parser.add_argument("-s", "--seed", action="store", dest="seed", type=str, default=FOOD_PAGE_URL)
+    parser.add_argument("-w", "--workers", action="store", dest="workers", type=int, default=5)
 
     # Get the start and end pages (end is inclusive)
     parser.add_argument("-b", "--begin", action="store", dest="begin", type=int)
@@ -19,8 +23,9 @@ if __name__ == "__main__":
 
     # Get the values
     args = parser.parse_args()
-    # file = args.file
+    uri = args.uri
     seed = args.seed
+    workers = args.workers
     begin = args.begin
     end = args.end
 
@@ -31,17 +36,24 @@ if __name__ == "__main__":
     if (begin is None) != (end is None):
         parser.error("Begin and End page must be provided together.")
     
-    # Open a synchronous chromium browser
-    with sync_playwright() as p:
-        pi = RealCanadianPageIteratorSync(playwright=p,
-                                        browser="chromium",
-                                        endpoint_uri="mongodb+srv://cadizd:3NkC4rGgaKedufa0@cluster0.2ighc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
-                                        database="page_data",
-                                        collection="jan_9",
-                                        root_url=seed,
-                                        headless=False,
-                                        slow_mo=0,
-                                        latitude_longitude=(49.8938887, -97.1886292),
-                                        permissions=["geolocation"],
-                                        store_location=1511)
-        pi.iterate_pages(begin, end)
+    # Open an asynchronous chromium browser
+    async def run_async():
+        async with async_playwright() as p:
+            pi = RealCanadianPageIteratorAsync(playwright=p,
+                                            browser="chromium",
+                                            endpoint_uri=uri,
+                                            database="page_data",
+                                            collection="jan_9",
+                                            root_url=seed,
+                                            headless=False,
+                                            slow_mo=0,
+                                            latitude_longitude=(49.8938887, -97.1886292),
+                                            permissions=["geolocation"],
+                                            store_location=1511)
+            await pi.initialize()
+            start = time.perf_counter()
+            await pi.iterate_pages_div(workers, begin, end)
+            total = time.perf_counter() - start
+            print(f"{begin} to {end} iterated in {total}s")
+
+    asyncio.run(run_async())
