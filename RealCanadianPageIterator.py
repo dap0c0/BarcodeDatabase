@@ -226,7 +226,7 @@ class RealCanadianPageIteratorSync(RealCanadianPageIterator):
             curr_url += f"?page={page_start}"
 
         page = context.new_page()
-        page.goto(curr_url, wait_until=wait_condition)
+        page.goto(curr_url, wait_unytil=wait_condition)
 
         # Start iterating until page_end is hit.
         i = page_start
@@ -240,6 +240,7 @@ class RealCanadianPageIteratorSync(RealCanadianPageIterator):
                                     page_end,
                                     '[aria-label="Next Page"]')
             i += 1
+
 
 class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
     def __init__(self,
@@ -265,6 +266,12 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                         latitude_longitude,
                                         permissions,
                                         store_location)
+    @abstractmethod
+    async def iterate_pages(self,
+                            workers: int,
+                            page_start: int,
+                            page_end: int):
+        pass
 
     async def initialize(self):
         self._browser = await getattr(self._playwright, self._browser_str).launch(
@@ -277,8 +284,6 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                             self._store_location)
 
 
-    async def iterate_pages(self, page_start: int, page_end: int):
-        return super().iterate_pages(page_start, page_end)
 
     def _modify_url(self,
                     url: str,
@@ -290,78 +295,22 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
 
         return url
 
-    async def _iterate_pages_one(self,
-                                page_start: int,
-                                page_end: int):
-        assert isinstance(page_start, int)
-        assert isinstance(page_end, int)
-        assert page_start <= page_end
-        assert page_start > 0
-        
-        # Open page at start
-        url = self._root_url
-
-        if page_start > 1:
-            url = self._modify_url(self._root_url, page_start)
-
-        page = await self._open_page(self._context, None, url)
-
-        # Start iterating from page_start to page_end inclusive
-        i = page_start
-        
-        while i <= page_end:
-            products = await self._extract_product_dicts(page)
-            print(f"{len(products)} products extracted from {page}")
-
-            if i != page_end:
-                await self._navigate_next_page(page, i, '[aria-label="Next Page"]')
-
-            i += 1
-
-        await page.close()
-
-    async def iterate_pages_div(self,
-                            workers: int,
-                            page_start: int,
-                            page_end: int):
-        ''' Allow <workers> many tabs to be open
-        and allow each to iterate pages in their respective
-        intervals.'''
-        assert isinstance(workers, int)
-        assert isinstance(page_start, int)
-        assert isinstance(page_end, int)
-        assert workers >= 1
-        num_pages = (page_end - page_start) + 1
-        pages_per_interval = int(num_pages / workers)
-        pages_remainder = num_pages % workers
-
-        # Define the page intervals for each worker.
-        # A basic linear equation is used for each interval:
-        # let n = page_start
-        # let L = (page_end - page_start) + 1
-        # let Ii = (xi, yi), where L = |xi - yi| for all i
-        # Then, xi = n + (i-1)*L
-        # and yi = xi + L - 1
-        intervals = []
-
-        for i in range(1, workers + 1):
-            xi = page_start + (i-1) * pages_per_interval
-            yi = xi + pages_per_interval - 1
-            
-            # The last worker will iterate the
-            # remaining pages (division was uneven).
-            if yi == workers:
-                yi += pages_remainder
-
-            intervals.append((xi, yi))
-
-        # Get coroutines to gather
-        iterate_tasks = [self._iterate_pages_one(intervals[i][0], intervals[i][1])
-                         for i in range(len(intervals))]
-
-        await asyncio.gather(*(iterate_tasks))
-
     # <------ Helper Functions ------>
+    async def _write_to_db(self,
+                           product_dicts: list):
+        triplets = []
+
+        # Note that the data extracted from each page
+        # does not include barcode data! Include such information.
+        for product in product_dicts:
+            product["codes"] = {
+                "upc": "",
+                "ean": "",
+                "plu": ""
+                }
+            triplet = ({"_id": product["product_id"]}, product, True)
+            triplets.append(triplet)
+
     async def _extract_product_dicts(self,
                                     page) -> list:
         # Wait until the following are visible:
@@ -390,7 +339,6 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
 
         return product_dicts
 
-
     async def _open_page(self,
                          context,
                          origin_page,
@@ -406,8 +354,8 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
         
         if not origin_page:
             page = await context.new_page()
-            await page.goto(url)
 
+        await page.goto(url)
         return page
 
     async def _navigate_next_page(self,
@@ -463,3 +411,176 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
             await context.add_cookies([store_cookie])
 
         return context
+
+class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
+    async def iterate_pages(self,
+                            workers: int,
+                            page_start: int,
+                            page_end: int):
+        await self._iterate_pages_div(workers, page_start, page_end)
+
+    async def _iterate_pages_div(self,
+                        workers: int,
+                        page_start: int,
+                        page_end: int):
+        ''' Allow <workers> many tabs to be open
+        and allow each to iterate pages in their respective
+        intervals.'''
+        assert isinstance(workers, int)
+        assert isinstance(page_start, int)
+        assert isinstance(page_end, int)
+        assert workers >= 1
+        num_pages = (page_end - page_start) + 1
+        pages_per_interval = int(num_pages / workers)
+        pages_remainder = num_pages % workers
+
+        # Define the page intervals for each worker.
+        # A basic linear equation is used for each interval:
+        # let n = page_start
+        # let L = (page_end - page_start) + 1
+        # let Ii = (xi, yi), where L = |xi - yi| for all i
+        # Then, xi = n + (i-1)*L
+        # and yi = xi + L - 1
+        intervals = []
+
+        for i in range(1, workers + 1):
+            xi = page_start + (i-1) * pages_per_interval
+            yi = xi + pages_per_interval - 1
+            
+            # The last worker will iterate the
+            # remaining pages (division was uneven).
+            if yi == workers:
+                yi += pages_remainder
+
+            intervals.append((xi, yi))
+
+        # Define our processing for each page.
+        # For any given page, extract all the products
+        # and write to our database.
+        async def extract_write(page):
+            products = await self._extract_product_dicts(page)
+            await self._write_to_db(products)
+
+        # Get coroutines to gather.
+        iterate_tasks = [self._iterate_pages_one(intervals[i][0], intervals[i][1], extract_write)
+                            for i in range(len(intervals))]
+
+        await asyncio.gather(*(iterate_tasks))
+
+    async def _iterate_pages_one(self,
+                                page_start: int,
+                                page_end: int,
+                                page_callback):
+            assert isinstance(page_start, int)
+            assert isinstance(page_end, int)
+            assert page_start <= page_end
+            assert page_start > 0
+            
+            # Open page at start
+            url = self._root_url
+
+            if page_start > 1:
+                url = self._modify_url(self._root_url, page_start)
+
+            page = await self._open_page(self._context, None, url)
+
+            # Start iterating from page_start to page_end inclusive
+            i = page_start
+            
+            # For each page, extract the product json
+            # and write it to the database.
+            while i <= page_end:
+                await page_callback(page)
+
+                if i != page_end:
+                    await self._navigate_next_page(page, i, '[aria-label="Next Page"]')
+
+                i += 1
+
+            await page.close()
+
+class RealCanadianPageIteratorAsyncQueue(RealCanadianPageIteratorAsync):
+    async def iterate_pages(self,
+                            workers: int,
+                            page_start: int,
+                            page_end: int):
+        assert isinstance(workers, int)
+        assert isinstance(page_start, int)
+        assert isinstance(page_end, int)
+        assert workers > 0
+        assert page_start > 0
+        assert page_end > 0
+        assert page_start <= page_end
+        await self._extract_queue_model(workers, page_start, page_end)
+
+    async def _extract_queue_model(self,
+                                   num_consumers: int,
+                                   page_start: int,
+                                   page_end: int):
+        async def url_producer(url_path: str,
+                                page_numbers: list,
+                                queue: asyncio.Queue):
+            ''' Produce all page urls and enqueue
+            them into the queue to be consumed.'''
+            assert isinstance(url_path, str)
+            assert isinstance(page_numbers, list)
+            assert isinstance(queue, asyncio.Queue)
+
+            # Add all page urls to the queue.
+            for i in page_numbers:
+                assert isinstance(i, int)
+
+                if i != 1:
+                    curr_url = self._modifiy_url(url_path, i)
+
+                else:
+                    curr_url = url_path
+                
+                print(f"Produced {curr_url}")
+                await queue.put(curr_url)
+
+        async def url_consumer(page, queue: asyncio.Queue):
+            ''' Using the current page,
+            navigate to the url consumed from the queue.'''
+            assert isinstance(queue, asyncio.Queue)
+
+            while True:
+                # Get the url from the queue
+                url = await queue.get()
+                print(url)
+
+                # Navigate to the url
+                await self._open_page(self._context,
+                                       None,
+                                       url)
+
+                # Extract the products
+                products = await self._extract_product_dicts(page)
+                print(f"{len(products)} products extracted from {url}")
+                await page.close()
+                
+                # Mark the url as explored!
+                queue.task_done()
+
+        # Begin extraction!
+        queue = asyncio.Queue()
+        producers = [asyncio.create_task(url_producer(self._root_url,
+                                                      list(range(page_start, page_end + 1)),
+                                                      queue))]
+        consumers = [asyncio.create_task(url_consumer(None, queue))
+                     for _ in range(num_consumers)]
+
+        # Wait for list of all urls to be produced.
+        await asyncio.gather(*producers)
+        print("All urls produced")
+
+        # Wait until all urls are consumed.
+        await queue.join()
+        print("All urls consumed")
+
+        # All consumers are idle!
+        # Cancel all of them.
+        for c in consumers:
+            c.cancel()
+
+
