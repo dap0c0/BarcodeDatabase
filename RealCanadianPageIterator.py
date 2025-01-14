@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright
 from DataExtractor import DataExtractor
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from MongoClient import MongoClientSync
+from MongoClient import MongoClientSync, MongoClientAsync
 import json
 import time
 
@@ -266,6 +266,9 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                         latitude_longitude,
                                         permissions,
                                         store_location)
+        self._db_client = MongoClientAsync(endpoint_uri)
+        self._db_client.select_collection(database, collection)
+
     @abstractmethod
     async def iterate_pages(self,
                             workers: int,
@@ -310,6 +313,8 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                 }
             triplet = ({"_id": product["product_id"]}, product, True)
             triplets.append(triplet)
+
+        await self._db_client.bulk_replace(triplets)
 
     async def _extract_product_dicts(self,
                                     page) -> list:
@@ -417,6 +422,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
                             workers: int,
                             page_start: int,
                             page_end: int):
+        await self._db_client.create_index("_id")
         await self._iterate_pages_div(workers, page_start, page_end)
 
     async def _iterate_pages_div(self,
@@ -491,6 +497,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             # and write it to the database.
             while i <= page_end:
                 await page_callback(page)
+                print(f"Extracted {page.url}")
 
                 if i != page_end:
                     await self._navigate_next_page(page, i, '[aria-label="Next Page"]')
@@ -531,7 +538,7 @@ class RealCanadianPageIteratorAsyncQueue(RealCanadianPageIteratorAsync):
                 assert isinstance(i, int)
 
                 if i != 1:
-                    curr_url = self._modifiy_url(url_path, i)
+                    curr_url = self._modify_url(url_path, i)
 
                 else:
                     curr_url = url_path
