@@ -1,11 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Pattern
-from ItemServer import ItemProtocol, ItemServer
-from ScryptPasswordDB import ScryptPasswordDB
+from MongoClient import MongoClientSync
 from HTTPResponse import HTTPResponse
 from SimpleHTTPFactory import SimpleHTTPFactory
 from AuthServer import AuthServerCookie
-from SessionHandler import SessionHandler
 from BarcodeGenerator import UPCBarcodeGenerator
 from PatternExtractor import PatternExtractor
 from twisted.web.server import Site, NOT_DONE_YET, Session
@@ -14,14 +11,14 @@ from zope.interface import Interface, Attribute, implementer
 from twisted.web.resource import Resource
 from twisted.web.http import Request
 from twisted.internet.defer import Deferred
-from twisted.internet.endpoints import SSL4ClientEndpoint, connectProtocol
-from twisted.internet.protocol import Protocol
 from twisted.internet import reactor, endpoints, ssl
-from twisted.web.util import redirectTo
+import argparse
 import urllib.parse
 import html
 import base64
 import io
+import json
+import re
 
 HTTP_PORT = 80
 ITEM_SERVER_HTTPS_PORT = 1931
@@ -274,9 +271,6 @@ class HomePage(SecureResource):
                                         {self._generate_link("Edit database", "/edit_database")}
                                     </div>
                                     <div>
-                                        {self._generate_link("Login", "/login")}
-                                    </div>
-                                    <div>
                                         {self._generate_link("Barcode Bruteforcer", "/barcode_bruteforcer")}
                                     </div>
                                 </body>
@@ -461,6 +455,23 @@ class BarcodeBruteforcerPage(SecureResource):
         
  
 class SearchPage(SecureResource):
+    INDENT_SPACES = 4
+    INVALID_CHARS = "{}[]()<>^"
+    MAX_REGEX_SIZE = 500
+
+    def __init__(self, auth_server_url: str,
+                 api_url: str,
+                 database: str,
+                 collection: str):
+        assert isinstance(auth_server_url, str)
+        assert isinstance(api_url, str)
+        assert isinstance(database, str)
+        assert isinstance(collection, str)
+        SecureResource.__init__(self, auth_server_url)
+        self._api_url = api_url
+        self._db_client = MongoClientSync(api_url)
+        self._db_client.select_collection(database, collection)
+
     def render_GET(self, request: Request):
         ''' Allow the user to input information
             into a search bar to perform
@@ -468,7 +479,6 @@ class SearchPage(SecureResource):
 
             For all items returned in the search page,
             table them and display hyperlinks to each page.'''
-
 
         # Callback:
         # Display content of response for debugging.
@@ -524,38 +534,145 @@ class SearchPage(SecureResource):
         # Callback:
         # Query the item server to perform a recursive search
         def search_database(search_query: str):
-            def display_json(http_response: HTTPResponse):
-                request.write(bytes(http_response.content, "utf-8"))
-                request.finish()
-
             print(f"Search query: {search_query}")
+            query_matches = {}
 
             if search_query != None:
-                api_url = f"https://localhost:1931/?search={search_query}"
+                api_url = self._api_url
                 headers = {}
                 headers["Connection"] = "close"
                 cookies = {}
                 session_cookie = ICookie(request.getSession()).value
                 cookies[SESSION_ID_KEY] = session_cookie
                 print(f"Cookies are {cookies}")
-                d = self._promise_http(api_url,
-                                       cookies_dict=cookies,
-                                       headers_dict=headers,
-                                       debug=True)
+
+                # Get all matches for the query.
+                cursor = self._db_client.find(None)
+                items = [item for item in cursor]
+                query_matches = {item["_id"]: item for item in self._get_matches(search_query, items)}
                 d.addCallback(display_json)
 
+            return query_matches
+
+        # Callback:
+        # Pretty print all data for the client on the page.
+        def display_json(data: dict):
+            request.write(b"<pre>" + bytes(json.dumps(data, indent=4), "utf-8") + b"</pre>")
+            request.finish()
+
+        # Start processing!
         d = self._verify_session(request)
         d.addCallback(print_response)
         d.addCallbacks(check_query, redirect_login)
         d.addCallbacks(search_database, render_page)
+        d.addCallback(display_json)
+
         return NOT_DONE_YET
 
+    # <------- Helper Functions ------>
+    def _check_valid_regex(self, regex):
+        ''' Check whether the regex string
+        qualifies for search.'''
+        assert isinstance(regex, str)
+
+        if len(regex) > SearchPage.MAX_REGEX_SIZE:
+            return False
+
+        for c in SearchPage.INVALID_CHARS:
+            if c in regex:
+                return False
+
+        return True
+
+    def _has_match(self,
+                  regex: str,
+                  dictionary: dict) -> bool:
+        ''' Check whether the dictionary has a value field
+        which matches the regex.
+        Key fields are ignored from regex search.'''
+        assert isinstance(regex, str)
+        assert isinstance(dictionary, dict)
+        
+        # Start matching by iterating through each key.
+        # If the string is present in the item
+        # title, return the entire item. If the string is present
+        # as a key value of the item, return the entire item.
+        # pattern_str = ".*%s.*" % regex
+        pattern_str = "%s" % regex
+        pattern_compiled = re.compile(re.escape(pattern_str), re.IGNORECASE)
+
+        # Prevent redundant recompilation of regex
+        # pattern through the driver.
+        def recursive_driver(pattern_compiled,
+                                dictionary: dict):
+            for key in dictionary:
+                assert isinstance(key, str)
+                value = dictionary[key]
+                assert isinstance(value, str) or isinstance(value, dict)
+
+                if isinstance(value, str):
+                    if pattern_compiled.search(value) == None:
+                        continue
+                    
+                    else:
+                        return True
+
+                elif isinstance(value, dict):
+                    return recursive_driver(pattern_compiled, value)
+
+        # Begin recursion
+        return recursive_driver(pattern_compiled, dictionary)
+
+    def _clean_whitespace(self,
+                          string: str):
+        assert isinstance(string, str)
+        return " ".join(string.split())
+
+    def _get_matches(self,
+                    query: str,
+                    items: list) -> list:
+        assert isinstance(query, str)
+        assert isinstance(items, list)
+        matches = []
+
+        # If the query has any spaces,
+        # treat them as seperate tokens!
+        query = self._clean_whitespace(query)
+        tokens = query.split(" ")
+
+        # Start search for all items.
+        # Note that for any given item,
+        # all tokens must match within the dictionary.
+        for item in items:
+            assert isinstance(item, dict)
+            item_matched = True
+
+            for token in tokens:
+                if not self._has_match(token, item):
+                    item_matched = False
+
+            if item_matched:
+                matches.append(item)
+
+        return matches
+
+
 if __name__ == "__main__":
+    # Get the mongodb endpoint for our item server.
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--item_server_uri", "-isuri", action="store", type=str, dest="item_server_uri", required=True)
+    parser.add_argument("-db", "--database", action="store", type=str, dest="database", required=True)
+    parser.add_argument("-col", "--collection", action="store", type=str, dest="collection", required=True)
+    args = parser.parse_args()
+    item_server_uri = args.item_server_uri
+    database = args.database
+    collection = args.collection
+
     # Construct the web tree
     root = Resource()
     root.putChild(b"login", LoginPage(AUTH_SERVER_URL))
     root.putChild(b"home", HomePage(AUTH_SERVER_URL))
-    root.putChild(b"search", SearchPage(AUTH_SERVER_URL))
+    root.putChild(b"search", SearchPage(AUTH_SERVER_URL, item_server_uri, database, collection))
     root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage(AUTH_SERVER_URL))
 
     # Serve the web tree
