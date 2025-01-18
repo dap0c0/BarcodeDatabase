@@ -96,10 +96,10 @@ class ItemProtocol(Resource):
                 wrote_success = self._item_database.write_data(product_id, data_dict)
 
                 if wrote_success:
-                    return json.dumps(data_dict, indent=self._indents).encode("utf-8")
-
+                    print(f"Wrote {product_id}")
+                    return bytes(f"{product_id}", "utf-8")
                 else:
-                    return b"" # TODO: change code to send back to client
+                    return b"fail" # TODO: change code to send back to client
 
             except json.decoder.JSONDecodeError:
                 pass
@@ -251,5 +251,5 @@ class ItemServer(object):
         reactor.run()
 
 if __name__ == "__main__":
-    item_server = ItemServer(ItemProtocol("new_test.json"))
+    item_server = ItemServer(ItemProtocol("test_a.json"))
     item_server.run_https(cert_file="crt.pem", key_file="key.pem")

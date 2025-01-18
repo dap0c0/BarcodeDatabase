@@ -213,7 +213,7 @@ class LoginPage(SecureResource):
         # Callback:
         # Redirect the client to the home page.
         def redirect_home(data: object):
-            request.redirect(url="http://localhost/home")
+            request.redirect(url="/home")
             request.finish()
 
         # Errback:
@@ -221,7 +221,7 @@ class LoginPage(SecureResource):
         # to the login page.
         def redirect_login(err):
             print(f"Redirecting login!")
-            request.redirect(url="http://localhost/login")
+            request.redirect(url="/login")
             request.finish()
             
         # Verify that the parameters are correct.

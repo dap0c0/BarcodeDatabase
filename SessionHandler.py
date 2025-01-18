@@ -1,20 +1,17 @@
-from twisted.web.server import Session
-
 class SessionHandler():
     def __init__(self):
         self._sessions = set()
 
-    def verify_session(self, session: Session):
+    def verify_session(self, cookie: str):
         '''Check that the session exists
             in the current pool.'''
-        assert isinstance(session, Session)
-        return session.uid in self._sessions
+        assert isinstance(cookie, str)
+        return cookie in self._sessions
 
-    def add_session(self, session):
-        if session.uid not in self._sessions:
-            self._sessions.add(session.uid)
-            session.notifyOnExpire(lambda: self._close_session(session.uid))
+    def add_session(self, cookie: str):
+        if cookie not in self._sessions:
+            self._sessions.add(cookie)
 
-    def _close_session(self, uid):
+    def _close_session(self, uid: str):
         print("Session", uid, "has expired.")
         self._sessions.remove(uid)

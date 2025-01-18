@@ -1,5 +1,4 @@
 import asyncio
-import os.path
 from abc import ABC, abstractmethod
 from playwright.sync_api import sync_playwright
 from DataExtractor import DataExtractor
@@ -285,9 +284,9 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                             self._latitude_longitude,
                                             self._permissions,
                                             self._store_location)
-
-
-
+    async def _get_last_page(self,):
+        ''' Return the last iterable page given'''
+        pass
     def _modify_url(self,
                     url: str,
                     page_ind: int):

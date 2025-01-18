@@ -162,11 +162,22 @@ class MongoClientSync(MongoClient):
         # Start bulk write
         return self._collection.bulk_write(operations)
 
-
-    
     # Indexing
     def create_index(self,
                      key: str):
         assert isinstance(key, str)
         self._verify_collection()
         return self._collection.create_index(key)
+
+    # Finding
+    def find(self,
+             filter: dict):
+        assert isinstance(filter, dict) or filter == None
+        self._verify_collection()
+        return self._collection.find(filter)
+
+    def find_one(self,
+                 filter: dict):
+        assert isinstance(filter, dict) or filter == None
+        self._verify_collection()
+        return self._collection.find_one(filter)
