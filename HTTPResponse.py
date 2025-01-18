@@ -106,3 +106,6 @@ class HTTPResponse():
     
     def __repr__(self):
         return self.content
+
+    def __len__(self):
+        return len(self.content)
