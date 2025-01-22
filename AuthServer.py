@@ -85,7 +85,6 @@ class AuthServerCookie(AuthServer):
         If authenticated, return the session_id to the client.
         If not authenticated, return an empty response.'''
         assert isinstance(request, Request)
-        breakpoint()
         
         # Check the session_id cookie.
         try:

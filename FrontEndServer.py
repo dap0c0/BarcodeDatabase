@@ -23,7 +23,7 @@ import re
 HTTP_PORT = 80
 ITEM_SERVER_HTTPS_PORT = 1931
 SESSION_ID_KEY = AuthServerCookie.SESSION_COOKIE_NAME
-AUTH_SERVER_URL = "https://localhost:3191/test_auth/"
+AUTH_SERVER_URL = "https://auth_server:3191/test_auth/"
 
 #----- Cookie persistence -------#
 class ICookie(Interface):
@@ -46,7 +46,7 @@ class SecureResource(Resource, ABC):
                         request: Request,
                         username: str=None,
                         password: str=None,
-                        auth_server_url=AUTH_SERVER_URL
+                        auth_server_url: str=None,
                         ) -> Deferred:
         ''' Query the authentication server endpoint and
         attempt to authenticate the current session.
@@ -226,7 +226,7 @@ class LoginPage(SecureResource):
             
         # Verify that the parameters are correct.
         # If so, add the session id to our handler.
-        d = self._verify_session(request, username, password)
+        d = self._verify_session(request, username, password, self._auth_server_url)
         d.addCallback(print_response)
         d.addCallback(set_session_cookie)
         d.addCallback(redirect_home)
@@ -241,7 +241,7 @@ class HomePage(SecureResource):
 
     def render_GET(self, request):
         '''Allow user to navigate between search and data addition.'''
-        d = self._verify_session(request)
+        d = self._verify_session(request, auth_server_url=self._auth_server_url)
 
         # Callback:
         # display content of response for debugging.
@@ -282,7 +282,7 @@ class HomePage(SecureResource):
         # to the login page.
         def redirect_login(err):
             print(f"Redirecting login!")
-            request.redirect(url="http://localhost/login")
+            request.redirect(url="/login")
             request.finish()
 
         d.addCallback(print_response)
@@ -343,10 +343,10 @@ class BarcodeBruteforcerPage(SecureResource):
         # Redirect them to the login page
         def redirect_login(err):
             print(f"Redirecting login!")
-            request.redirect(url="http://localhost/login")
+            request.redirect(url="/login")
             request.finish()
             
-        d = self._verify_session(request)
+        d = self._verify_session(request, auth_server_url=self._auth_server_url)
         d.addCallback(check_token)
         d.addCallbacks(render_page, redirect_login)
         return NOT_DONE_YET
@@ -444,10 +444,10 @@ class BarcodeBruteforcerPage(SecureResource):
         # Redirect them to the login page
         def redirect_login(err):
             print(f"Redirecting login!")
-            request.redirect(url="http://localhost/login")
+            request.redirect(url="/login")
             request.finish()
 
-        d = self._verify_session(request)
+        d = self._verify_session(request, auth_server_url=self._auth_server_url)
         d.addCallback(check_token)
         d.addCallbacks(check_input, redirect_login)
         d.addCallbacks(render_barcodes, render_page)
@@ -494,7 +494,7 @@ class SearchPage(SecureResource):
         # to the login page.
         def redirect_login(err):
             print(f"Redirecting login!")
-            request.redirect(url="http://localhost/login")
+            request.redirect(url="/login")
             request.finish()
 
         # Callback:
@@ -561,7 +561,7 @@ class SearchPage(SecureResource):
             request.finish()
 
         # Start processing!
-        d = self._verify_session(request)
+        d = self._verify_session(request, auth_server_url=self._auth_server_url)
         d.addCallback(print_response)
         d.addCallbacks(check_query, redirect_login)
         d.addCallbacks(search_database, render_page)
@@ -658,22 +658,25 @@ class SearchPage(SecureResource):
 
 
 if __name__ == "__main__":
+    auth_server_uri = AUTH_SERVER_URL
     # Get the mongodb endpoint for our item server.
     parser = argparse.ArgumentParser()
     parser.add_argument("--item_server_uri", "-isuri", action="store", type=str, dest="item_server_uri", required=True)
     parser.add_argument("-db", "--database", action="store", type=str, dest="database", required=True)
     parser.add_argument("-col", "--collection", action="store", type=str, dest="collection", required=True)
+    parser.add_argument("--auth_server_uri", "-asuri", action="store", type=str, dest="auth_server_uri", required=True)
     args = parser.parse_args()
     item_server_uri = args.item_server_uri
+    auth_server_uri = args.auth_server_uri
     database = args.database
     collection = args.collection
 
     # Construct the web tree
     root = Resource()
-    root.putChild(b"login", LoginPage(AUTH_SERVER_URL))
-    root.putChild(b"home", HomePage(AUTH_SERVER_URL))
-    root.putChild(b"search", SearchPage(AUTH_SERVER_URL, item_server_uri, database, collection))
-    root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage(AUTH_SERVER_URL))
+    root.putChild(b"login", LoginPage(auth_server_uri))
+    root.putChild(b"home", HomePage(auth_server_uri))
+    root.putChild(b"search", SearchPage(auth_server_uri, item_server_uri, database, collection))
+    root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage(auth_server_uri))
 
     # Serve the web tree
     factory = Site(root)

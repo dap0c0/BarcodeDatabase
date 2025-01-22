@@ -1,0 +1,35 @@
+# Comments are provided throughout this file to help you get started.
+# If you need more help, visit the Docker Compose reference guide at
+# https://docs.docker.com/go/compose-spec-reference/
+
+# Here the instructions define your application as a service called "server".
+# This service is built from the Dockerfile in the current directory.
+# You can add other services your application may depend on here, such as a
+# database or a cache. For examples, see the Awesome Compose repository:
+# https://github.com/docker/awesome-compose
+services:
+  front_end:
+    build:
+      context: .
+      dockerfile: ./Docker/front_end_server/Dockerfile
+    image: front-end-image:latest
+    ports:
+      - 80
+    links:
+      - "auth_server"
+    command:
+      python3 FrontEndServer.py -db page_data -col jan_14 -isuri "mongodb+srv://cadizd:3NkC4rGgaKedufa0@cluster0.2ighc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0" -asuri "https://auth_server:3191/test_auth/"
+
+  auth_server:
+    build:
+      context: .
+      dockerfile: ./Docker/auth_server/Dockerfile
+    image: auth-server-image:latest
+    ports:
+      - 3191
+    command:
+      python3 AuthServer.py
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token eyJhIjoiYjFiZTMzMzNhYTU5ZTJlYTI0OTdkMmRmMWUxNzJiZDQiLCJ0IjoiNDgxMDgwYzUtZmViOC00NjQxLTliNDctY2EwZjYwOGUxZGM4IiwicyI6Ill6Y3laR1JqTnpBdE1UUXpaaTAwWW1FMUxXRTBNV1F0T0dFMU1qY3pPVGswTjJNMiJ9
