@@ -1,12 +1,10 @@
 import asyncio
 from abc import ABC, abstractmethod
-from playwright.sync_api import sync_playwright
 from DataExtractor import DataExtractor
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 from MongoClient import MongoClientSync, MongoClientAsync
-import json
-import time
+import playwright._impl._errors
 
 class RealCanadianPageIterator(ABC):
     def __init__(self,
@@ -159,7 +157,6 @@ class RealCanadianPageIteratorSync(RealCanadianPageIterator):
 
         return product_dicts
 
-
     def _create_context(self,
                     browser,
                     latitude_longitude: tuple=None,
@@ -284,9 +281,54 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                             self._latitude_longitude,
                                             self._permissions,
                                             self._store_location)
-    async def _get_last_page(self,):
+
+    async def _get_last_page(self, page) -> int:
         ''' Return the last iterable page given'''
-        pass
+
+        try:
+            # Wait for the page navigation to be available
+            # at the bottom of the page.
+            await page.wait_for_selector("nav.css-1rb8z0p")
+            html = await page.inner_html("nav.css-1rb8z0p")
+            pagination_soup = BeautifulSoup(html, "html.parser")
+
+            # Narrow all selected elements to
+            # the indexed page buttons. Ignore the navigation arrow
+            # and ellipsis.
+            indexed_page_buttons = pagination_soup.find_all("a", class_="chakra-link css-1vwc5vj")
+
+            # Observe the last button's index:
+            # it is the last available page.
+            # Note the strange syntax below: .string returns
+            # <class 'bs4.element.NavigableString'>. It must be converted to a genuine
+            # string before converted to an integer.
+            return int(str(indexed_page_buttons[-1].string))
+
+        except playwright._impl._errors.TimeoutError:
+            # No locator was loaded on the page!
+            # Assume that no pagination exists
+            return None
+
+    # passed!
+    async def _test_one_page_with_pagination(self):
+        TEST_URL = "https://www.realcanadiansuperstore.ca/en/food/c/27985"
+        page = await self._open_page(self._context, None, TEST_URL)
+        last_page = await self._get_last_page(page)
+        assert last_page == 209
+
+    # passed!
+    async def _test_one_page_no_pagination(self):
+        TEST_URL = "https://www.realcanadiansuperstore.ca/en/batteries-automotive/automotive-electronics/c/28097"
+        page = await self._open_page(self._context, None, TEST_URL)
+        last_page = await self._get_last_page(page)
+        assert last_page == None
+
+    # need to find a valid url for this case
+    async def _test_one_page_with_pagination_no_arrow(self):
+        TEST_URL = ""
+        page = await self._open_page(self._context, None, TEST_URL)
+        await self._get_last_page(page)
+        
     def _modify_url(self,
                     url: str,
                     page_ind: int):
@@ -504,89 +546,4 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
                 i += 1
 
             await page.close()
-
-class RealCanadianPageIteratorAsyncQueue(RealCanadianPageIteratorAsync):
-    async def iterate_pages(self,
-                            workers: int,
-                            page_start: int,
-                            page_end: int):
-        assert isinstance(workers, int)
-        assert isinstance(page_start, int)
-        assert isinstance(page_end, int)
-        assert workers > 0
-        assert page_start > 0
-        assert page_end > 0
-        assert page_start <= page_end
-        await self._extract_queue_model(workers, page_start, page_end)
-
-    async def _extract_queue_model(self,
-                                   num_consumers: int,
-                                   page_start: int,
-                                   page_end: int):
-        async def url_producer(url_path: str,
-                                page_numbers: list,
-                                queue: asyncio.Queue):
-            ''' Produce all page urls and enqueue
-            them into the queue to be consumed.'''
-            assert isinstance(url_path, str)
-            assert isinstance(page_numbers, list)
-            assert isinstance(queue, asyncio.Queue)
-
-            # Add all page urls to the queue.
-            for i in page_numbers:
-                assert isinstance(i, int)
-
-                if i != 1:
-                    curr_url = self._modify_url(url_path, i)
-
-                else:
-                    curr_url = url_path
-                
-                print(f"Produced {curr_url}")
-                await queue.put(curr_url)
-
-        async def url_consumer(page, queue: asyncio.Queue):
-            ''' Using the current page,
-            navigate to the url consumed from the queue.'''
-            assert isinstance(queue, asyncio.Queue)
-
-            while True:
-                # Get the url from the queue
-                url = await queue.get()
-                print(url)
-
-                # Navigate to the url
-                await self._open_page(self._context,
-                                       None,
-                                       url)
-
-                # Extract the products
-                products = await self._extract_product_dicts(page)
-                print(f"{len(products)} products extracted from {url}")
-                await page.close()
-                
-                # Mark the url as explored!
-                queue.task_done()
-
-        # Begin extraction!
-        queue = asyncio.Queue()
-        producers = [asyncio.create_task(url_producer(self._root_url,
-                                                      list(range(page_start, page_end + 1)),
-                                                      queue))]
-        consumers = [asyncio.create_task(url_consumer(None, queue))
-                     for _ in range(num_consumers)]
-
-        # Wait for list of all urls to be produced.
-        await asyncio.gather(*producers)
-        print("All urls produced")
-
-        # Wait until all urls are consumed.
-        await queue.join()
-        print("All urls consumed")
-
-        # All consumers are idle!
-        # Cancel all of them.
-        for c in consumers:
-            c.cancel()
-
 
