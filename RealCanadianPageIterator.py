@@ -1,4 +1,5 @@
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from DataExtractor import DataExtractor
 from bs4 import BeautifulSoup
@@ -36,214 +37,21 @@ class RealCanadianPageIterator(ABC):
         self._store_location = store_location
 
     @abstractmethod
-    def iterate_pages(self,
-                       page_start: int,
-                       page_end: int):
+    def crawl(self, workers: int):
         pass
 
-class RealCanadianPageIteratorSync(RealCanadianPageIterator):
-    def __init__(self,
-                playwright,
-                browser: str,
-                database: str,
-                collection: str,
-                endpoint_uri: str,
-                root_url: str,
-                headless: bool=False,
-                slow_mo: int=100,
-                latitude_longitude: tuple=None,
-                permissions: list=None,
-                store_location: int=None):
-        RealCanadianPageIterator.__init__(self,
-                                        playwright,
-                                        browser,
-                                        endpoint_uri,
-                                        root_url,
-                                        headless,
-                                        slow_mo,
-                                        latitude_longitude,
-                                        permissions,
-                                        store_location)
-        # Dynamically create the browser
-        self._browser = getattr(playwright, browser).launch(
-            headless=headless,
-            slow_mo=slow_mo
-        )
-        self._context = self._create_context(self._browser,
-                                            latitude_longitude,
-                                            permissions,
-                                            store_location)
-
-        # Allow the data to be written
-        # to the server.
-        self._db_client = MongoClientSync(endpoint_uri)
-        self._db_client.select_collection(database, collection)
-           
-    def iterate_pages(self,
-                      page_start,
-                      page_end):
-        ''' Iterate pages from page_start to page_end inclusive.
-        For each page, extract dictionaries of data and write
-        into self._item_database.'''
-
-        def replace_many(page):
-            dicts = self._extract_product_dicts(page)
-            triplets = []
-
-            # Note that the data extracted from each page
-            # does not include barcode data! Include such information.
-            for product in dicts:
-                product["codes"] = {
-                    "upc": "",
-                    "ean": "",
-                    "plu": ""
-                    }
-                triplet = ({"_id": product["product_id"]}, product, True)
-                triplets.append(triplet)
-
-            self._db_client.bulk_replace(triplets)
-
-        self._db_client.create_index("_id")
-        self._iterate_pages(self._context,
-                            page_start,
-                            page_end,
-                            replace_many)
-
-    # <------ Helper Functions ------>
-    def _navigate_next_page(self,
-                        page,
-                        curr_page_ind: int,
-                        page_end_ind: int,
-                        sel_to_wait: str):
-        ''' Navigate to page n+1 from page n.'''
-        assert isinstance(curr_page_ind, int)
-        assert isinstance(page_end_ind, int)
-        assert isinstance(sel_to_wait, str)
-        page.wait_for_selector(sel_to_wait)
-        next_page_button = page.locator(sel_to_wait)
-        next_page_button.click()
-
-    def _extract_product_dicts(self,
-                              page) -> list:
-        # Wait until the following are visible:
-        # <div id="root">
-        #   <div id="site-layout">
-        #       <div class="site-layout__content">
-        #           <main class="site-content" id="site-content">
-        #               <div class="view-resolver-component">
-        #                   <div class="css-1nntebs">
-        #                       <div class="css-0">
-        #                           <div class="css-1tjthuk">
-        #
-        # id -> #
-        # class -> .
-        page.is_visible("div#root")
-        page.is_visible("div#site-layout")
-        page.is_visible("div.site-layout__content")
-        page.is_visible("div.view-resolver-component")
-        page.is_visible("div.css-1nntebs")
-        page.is_visible("div.css-0")
-
-        # Wait for the product grid to be available.
-        page.wait_for_selector('div[data-testid="product-grid"]')
-        html = page.inner_html("div.css-1tjthuk")
-        grid_soup = BeautifulSoup(html, "html.parser")
-        
-        # All the children of the product grid are products!
-        product_dicts = []
-
-        for product_div in grid_soup.children:
-            product_dicts.append(DataExtractor(product_div).data)
-
-        return product_dicts
-
-    def _create_context(self,
-                    browser,
-                    latitude_longitude: tuple=None,
-                    permissions: list=None,
-                    store_location: int=None):
-        assert isinstance(latitude_longitude, tuple) or latitude_longitude == None
-        assert isinstance(permissions, list) or permissions == None
-        assert isinstance(store_location, int) or store_location == None
-        context = browser.new_context()
-
-        # Set geolocation if neccessary
-        if latitude_longitude:
-            assert len(latitude_longitude) == 2
-            latitude = latitude_longitude[0]
-            longitude = latitude_longitude[1]
-            assert isinstance(latitude, float)
-            assert isinstance(longitude, float)
-            context.set_geolocation({
-                "latitude": latitude,
-                "longitude": longitude
-            })
-
-        # Set geolocation permissions if needed
-        if permissions:
-            for permission in permissions:
-                assert isinstance(permission, str)
-
-            context.grant_permissions(permissions)
-
-        # Set the store if needed
-        if store_location:
-            store_cookie = {
-                "name": "last_selected_store",
-                "value": f"{store_location}",
-                "url": "https://www.realcanadiansuperstore.ca", # TODO: fix hardcoded value
-                "httpOnly": False,
-                "secure": True,
-                "sameSite": "Lax"
-            }
-            context.add_cookies([store_cookie])
-
-        return context
-
-    def _iterate_pages(self,
-                    context,
-                    page_start: int,
-                    page_end: int,
-                    page_callback,
-                    wait_condition: str="domcontentloaded"):
-        ''' From <page_start> to <page_end> inclusive,
-            iterate through the pages exhaustively,
-            calling <page_callback> for each page.'''
-        assert isinstance(page_start, int)
-        assert isinstance(page_end, int)
-        assert isinstance(wait_condition, str)
-        assert page_start <= page_end
-        assert page_start > 0
-        
-        # First navigate to the start page_start
-        curr_url = self._root_url
-        
-        if page_start != 1:
-            curr_url += f"?page={page_start}"
-
-        page = context.new_page()
-        page.goto(curr_url, wait_unytil=wait_condition)
-
-        # Start iterating until page_end is hit.
-        i = page_start
-
-        while i <= page_end:
-            page_callback(page)
-
-            if i != page_end:
-                self._navigate_next_page(page,
-                                    i,
-                                    page_end,
-                                    '[aria-label="Next Page"]')
-            i += 1
-
+    @abstractmethod
+    async def _iterate_leaf(self,
+                            page,
+                            workers: int,
+                            page_start: int,
+                            page_end: int):
+        pass
 
 class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
     def __init__(self,
                  playwright,
                  browser: str,
-                 database: str,
-                 collection: str,
                  endpoint_uri: str,
                  root_url: str,
                  headless: bool=False,
@@ -263,14 +71,6 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                         permissions,
                                         store_location)
         self._db_client = MongoClientAsync(endpoint_uri)
-        self._db_client.select_collection(database, collection)
-
-    @abstractmethod
-    async def iterate_pages(self,
-                            workers: int,
-                            page_start: int,
-                            page_end: int):
-        pass
 
     async def initialize(self):
         self._browser = await getattr(self._playwright, self._browser_str).launch(
@@ -282,56 +82,9 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                             self._permissions,
                                             self._store_location)
 
-    async def _get_last_page(self, page) -> int:
-        ''' Return the last iterable page given'''
-
-        try:
-            # Wait for the page navigation to be available
-            # at the bottom of the page.
-            await page.wait_for_selector("nav.css-1rb8z0p")
-            html = await page.inner_html("nav.css-1rb8z0p")
-            pagination_soup = BeautifulSoup(html, "html.parser")
-
-            # Narrow all selected elements to
-            # the indexed page buttons. Ignore the navigation arrow
-            # and ellipsis.
-            indexed_page_buttons = pagination_soup.find_all("a", class_="chakra-link css-1vwc5vj")
-
-            # Observe the last button's index:
-            # it is the last available page.
-            # Note the strange syntax below: .string returns
-            # <class 'bs4.element.NavigableString'>. It must be converted to a genuine
-            # string before converted to an integer.
-            return int(str(indexed_page_buttons[-1].string))
-
-        except playwright._impl._errors.TimeoutError:
-            # No locator was loaded on the page!
-            # Assume that no pagination exists
-            return None
-
-    # passed!
-    async def _test_one_page_with_pagination(self):
-        TEST_URL = "https://www.realcanadiansuperstore.ca/en/food/c/27985"
-        page = await self._open_page(self._context, None, TEST_URL)
-        last_page = await self._get_last_page(page)
-        assert last_page == 209
-
-    # passed!
-    async def _test_one_page_no_pagination(self):
-        TEST_URL = "https://www.realcanadiansuperstore.ca/en/batteries-automotive/automotive-electronics/c/28097"
-        page = await self._open_page(self._context, None, TEST_URL)
-        last_page = await self._get_last_page(page)
-        assert last_page == None
-
-    # need to find a valid url for this case
-    async def _test_one_page_with_pagination_no_arrow(self):
-        TEST_URL = ""
-        page = await self._open_page(self._context, None, TEST_URL)
-        await self._get_last_page(page)
-        
     def _modify_url(self,
-                    url: str,
-                    page_ind: int):
+                url: str,
+                page_ind: int):
         if url.endswith("/"):
             url = url[:len(url) - 1]
             
@@ -359,19 +112,6 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
 
     async def _extract_product_dicts(self,
                                     page) -> list:
-        # Wait until the following are visible:
-        # <div id="root">
-        #   <div id="site-layout">
-        #       <div class="site-layout__content">
-        #           <main class="site-content" id="site-content">
-        #               <div class="view-resolver-component">
-        #                   <div class="css-1nntebs">
-        #                       <div class="css-0">
-        #                           <div class="css-1tjthuk">
-        #
-        # id -> #
-        # class -> .
-
         # Wait for the product grid to be available.
         await page.wait_for_selector('div[data-testid="product-grid"]')
         html = await page.inner_html("div.css-1tjthuk")
@@ -459,25 +199,200 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
         return context
 
 class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
-    async def iterate_pages(self,
+    
+
+    # TODO: fix hardcoded values for desired departments to crawl.
+    async def crawl(self, workers: int):
+        root_page = await self._open_page(self._context, None, self._root_url)
+        await root_page.wait_for_selector('nav.primary-nav[aria-label="Main navigation"]')
+
+        # Extract the data from the navigation buttons for only
+        # CHABA (home, beauty, baby) and Joe Fresh.
+        # Note that the buttons are parents of the span tags.
+        # The "ul" tag will be extracted instead of each button
+        # to skip needing to emulate hovering on the browser.
+        html = await root_page.inner_html('ul.primary-nav__list[data-code="root"]')
+        soup = BeautifulSoup(html, "html.parser")
+
+        for child in soup.children:
+            if child.button != None:
+                if str(child.button.span.string) == "Home, Beauty & Baby":
+                    hbb_ul_tag = child.ul
+
+                elif str(child.button.span.string) == "Joe Fresh":
+                    jf_ul_tag = child.ul
+        
+        assert hbb_ul_tag != None, "No CHABA ul tag was extracted."
+        assert jf_ul_tag != None, "No Joe Fresh ul tag was extracted."
+
+        # All relevant department buttons were extracted!
+        # Now, extract the url of all iterable pages (leafs) from these
+        # departments and iterate each and every one of them.
+        hbb_urls = await self._get_urls_surface(hbb_ul_tag)
+        jf_urls = await self._get_urls_surface(jf_ul_tag)
+        hbb_leafs = await self._extract_leafs_department(hbb_urls, workers)
+        jf_leafs = await self._extract_leafs_department(jf_urls, workers)
+
+        # Start extracting products from every product
+        # page (leaf), per department. Write each product to the respective
+        # database (the department) and the collection (the current date).
+        # For example, A Joe Fresh leaf iterated on Jan 25, 2025 will have documents
+        # uploaded to joe-fresh/2025-01-5.
+        date = time.strftime("%Y-%m-%d")
+        leafs_list = [
+            ("grocery", ["https://www.realcanadiansuperstore.ca/en/food/c/27985"]),
+            ("home-beauty-baby", hbb_leafs),
+            ("joe-fresh", jf_leafs)
+        ]
+        for pair in leafs_list:
+            department, leafs = pair
+            self._db_client.select_collection(database=department, collection=date)
+            await self._db_client.create_index("_id")
+            page = await self._open_page(self._context, None, "https://www.google.com")
+            
+            for leaf in leafs:
+                page = await self._open_page(self._context, page, leaf)
+                await self._iterate_leaf(page, workers, page_start=1, page_end=None)
+
+    # ------ Extraction of each department ------ #
+    async def _extract_leafs_department(self, department_links: list, workers: int):
+        async def foo(leafs_mutable: list, link: str):
+            page = await self._open_page(self._context, None, link)
+            leafs = await self._extract_leafs_no_click(page)
+            leafs_mutable.append(leafs)
+            
+        leafs = []
+
+        while len(department_links) != 0:
+            tasks = []
+
+            for _ in range(workers):
+                tasks.append(foo(leafs, department_links.pop()))
+
+            await asyncio.gather(*tasks)
+        return leafs
+
+    async def _get_urls_surface(self, department_tag) -> list:
+        '''For the given <department>, extract all level-1 urls.'''
+        links = []
+
+        for li_tag in department_tag.contents:
+            assert li_tag.name == "li"
+            links.append("https://realcanadiansuperstore.ca" + li_tag.a.get("href"))
+
+        return links
+
+    async def _extract_leafs_no_click(self, page) -> list:
+        ''' Return a list of all iterable pages
+        from the surface url.'''
+        assert page != None
+        
+        # Observe the side accordion list of the page, like in
+        # https://www.realcanadiansuperstore.ca/en/baby/c/27987?navid=flyout-L2-Baby.
+        # Extract the links of every category.
+        await page.wait_for_selector("div.chakra-accordion.css-8atqhb")
+        accordion_list_html = await page.inner_html("div.chakra-accordion.css-8atqhb")
+        accordion_soup = BeautifulSoup(accordion_list_html, "html.parser")
+        links = []
+        
+        for div in accordion_soup.children:
+            assert div.get("class")[0] == "css-srrvm8"
+            pulled_list = div.find("ul", class_="css-pc4dq5")
+            see_all_tag = pulled_list.contents[0]
+            assert see_all_tag.string == "See All"
+            link_tag = see_all_tag.find("a", class_="css-1o1i5mr")
+            links.append("https://www.realcanadiansuperstore.ca" + str(link_tag.get("href"))) # TODO: fix harcoded domain string.
+
+        # Exhaust every path until every
+        # leaf is found.
+        leafs = []
+
+        for link in links:
+            new_page = await self._open_page(self._context, None, link)
+            
+            if await self._check_leaf(new_page):
+                leafs.append(link)
+
+            # Begin recursion
+            else:
+                leafs.append(await self._extract_leafs_no_click(new_page))
+
+            # Save memory by closing tab
+            await new_page.close()
+
+        return leafs
+
+    async def _check_leaf(self, page) -> bool:
+        ''' Every page with a product grid always
+        has a "Sort by: Relevance" button at the top.
+        A page is a leaf if it contains this sort element.'''
+        try:
+            await page.wait_for_selector("div.css-2wihsd")
+            return True
+
+        except playwright._impl._errors.TimeoutError:
+            return False
+
+    async def _get_last_page(self, page) -> int | None:
+        ''' Return the last iterable page from the
+        current page.'''
+
+        try:
+            # Wait for the page navigation to be available
+            # at the bottom of the page.
+            await page.wait_for_selector("nav.css-1rb8z0p")
+            html = await page.inner_html("nav.css-1rb8z0p")
+            pagination_soup = BeautifulSoup(html, "html.parser")
+
+            # Narrow all selected elements to
+            # the indexed page buttons. Ignore the navigation arrow
+            # and ellipsis.
+            indexed_page_buttons = pagination_soup.find_all("a", class_="chakra-link css-1vwc5vj")
+
+            # Observe the last button's index:
+            # it is the last available page.
+            # Note the strange syntax below: .string returns
+            # <class 'bs4.element.NavigableString'>. It must be converted to a genuine
+            # string before converted to an integer.
+            return int(str(indexed_page_buttons[-1].string))
+
+        except playwright._impl._errors.TimeoutError:
+            # No locator was loaded on the page!
+            # Assume that no pagination exists
+            return None
+
+    #------- Leaf iteration code --------------#
+    async def _iterate_leaf(self,
+                            page,
                             workers: int,
                             page_start: int,
-                            page_end: int):
-        await self._db_client.create_index("_id")
-        await self._iterate_pages_div(workers, page_start, page_end)
-
-    async def _iterate_pages_div(self,
-                        workers: int,
-                        page_start: int,
-                        page_end: int):
+                            page_end: int | None):
         ''' Allow <workers> many tabs to be open
         and allow each to iterate pages in their respective
-        intervals.'''
+        intervals.
+
+        If there are more workers than pages,
+        let # workers == # pages.'''
         assert isinstance(workers, int)
         assert isinstance(page_start, int)
-        assert isinstance(page_end, int)
+        assert isinstance(page_end, int) or page_end == None
         assert workers >= 1
+
+        # Check whether an indefinite iteration
+        # is to happen.
+        if page_end == None:
+            last_page_id = await self._get_last_page(page)
+            page_end = last_page_id
+            
+        # Check whether there are enough pages
+        # to distribute among the workers.
+        assert page_end != None
         num_pages = (page_end - page_start) + 1
+
+        if num_pages <= workers:
+            workers = num_pages
+
+        # Start distributing page intervals across the workers.
         pages_per_interval = int(num_pages / workers)
         pages_remainder = num_pages % workers
 
@@ -509,12 +424,13 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             await self._write_to_db(products)
 
         # Get coroutines to gather.
-        iterate_tasks = [self._iterate_pages_one(intervals[i][0], intervals[i][1], extract_write)
+        iterate_tasks = [self._iterate_leaf_one(page, intervals[i][0], intervals[i][1], extract_write)
                             for i in range(len(intervals))]
 
         await asyncio.gather(*(iterate_tasks))
 
-    async def _iterate_pages_one(self,
+    async def _iterate_leaf_one(self,
+                                page,
                                 page_start: int,
                                 page_end: int,
                                 page_callback):
@@ -522,14 +438,6 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             assert isinstance(page_end, int)
             assert page_start <= page_end
             assert page_start > 0
-            
-            # Open page at start
-            url = self._root_url
-
-            if page_start > 1:
-                url = self._modify_url(self._root_url, page_start)
-
-            page = await self._open_page(self._context, None, url)
 
             # Start iterating from page_start to page_end inclusive
             i = page_start
@@ -544,6 +452,59 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
                     await self._navigate_next_page(page, i, '[aria-label="Next Page"]')
 
                 i += 1
-
             await page.close()
+
+    # passed!
+    async def _test_one_page_with_pagination(self):
+        TEST_URL = "https://www.realcanadiansuperstore.ca/en/food/c/27985"
+        page = await self._open_page(self._context, None, TEST_URL)
+        last_page = await self._get_last_page(page)
+        assert last_page == 209
+
+    # passed!
+    async def _test_one_page_no_pagination(self):
+        TEST_URL = "https://www.realcanadiansuperstore.ca/en/batteries-automotive/automotive-electronics/c/28097"
+        page = await self._open_page(self._context, None, TEST_URL)
+        last_page = await self._get_last_page(page)
+        assert last_page == None
+
+    # need to find a validt url for this case
+    async def _test_one_page_with_pagination_no_arrow(self):
+        TEST_URL = ""
+        page = await self._open_page(self._context, None, TEST_URL)
+        await self._get_last_page(page)
+
+    # passed!
+    async def _test_multiple_urls(self):
+        urls = ["https://www.realcanadiansuperstore.ca/en/pet-food-supplies/dogs/c/28040",
+                "https://www.realcanadiansuperstore.ca/en/pet-food-supplies/cats/c/28039",
+                "https://www.realcanadiansuperstore.ca/en/pet-food-supplies/small-animals/c/28043",
+                "https://www.realcanadiansuperstore.ca/en/pet-food-supplies/birds/c/28038"]
+
+        async def test_driver(url: str):
+            page = await self._open_page(self._context, None, url)
+            last_page = await self._get_last_page(page)
+            print(f"[{last_page}]: {url}")
+
+        tasks = [test_driver(url) for url in urls]
+        await asyncio.gather(*tasks)
+
+    async def _test_extract_leafs(self):
+        async def no_click():
+            async def international():
+                url = "https://www.realcanadiansuperstore.ca/en/food/international-foods/c/58044?navid=flyout-L2-International-Foods"
+                page = await self._open_page(self._context, None, url)
+                leafs = await self._extract_leafs_no_click(page)
+                print(leafs)
+
+            async def baby():
+                url = "https://www.realcanadiansuperstore.ca/en/baby/c/27987?navid=flyout-L2-Baby"
+                page = await self._open_page(self._context, None, url)
+                leafs = await self._extract_leafs_no_click(page)
+                print(leafs)
+
+            # await international()
+            await baby()
+        await no_click()
+
 
