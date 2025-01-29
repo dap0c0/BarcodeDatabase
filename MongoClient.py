@@ -2,6 +2,14 @@ from abc import ABC, abstractmethod
 import pymongo
 import json
 
+class DatabaseInvalid(pymongo.errors.PyMongoError):
+    ''' The queried database is invalid (e.g. doesn't exist).'''
+    pass
+
+class CollectionNotFound(pymongo.errors.CollectionInvalid):
+    ''' The queried collection doesn't exist.'''
+    pass
+
 class MongoClient(ABC):
     def __init__(self,
                  endpoint_uri: str):
@@ -47,6 +55,7 @@ class MongoClient(ABC):
         assert isinstance(collection, str)
         collection = self._client[database][collection]
         self._collection = collection
+        return collection
 
     def _verify_collection(self):
         assert self._collection != None, "The collection is unselected!"
@@ -108,12 +117,58 @@ class MongoClientAsync(MongoClient):
         # Start bulk write
         return await self._collection.bulk_write(operations)
 
+    # Update
+    async def bulk_update(self,
+                          document_pairs: list):
+        assert isinstance(document_pairs, list)
+        self._verify_collection()
+        operations = []
+        
+        for pair in document_pairs:
+            assert isinstance(pair, tuple), f"{pair} is not a tuple!"
+            assert len(pair) == 2, f"The pair should have two values."
+            query_filter, update_dict = pair
+            assert isinstance(query_filter, dict)
+            assert isinstance(update_dict, dict)
+            operations.append(pymongo.UpdateOne(query_filter, update_dict))
+
+        # Start bulk update
+        return await self._collection.bulk_write(operations)
+
+    async def find(self,
+                   query_filter: dict):
+        assert isinstance(query_filter, dict)
+        return self._collection.find(query_filter)
+
     # Indexing
     async def create_index(self,
                      key: str):
         assert isinstance(key, str)
         self._verify_collection()
         return await self._collection.create_index(key)
+
+    async def check_exists_db(self,
+                              database: str):
+        assert isinstance(database, str)
+        dbs = await self._client.list_database_names()
+
+        if database not in dbs:
+            return False
+
+        return True
+
+    async def check_exists_col(self,
+                               db: str,
+                               collection: str):
+        if await self.check_exists_db(db):
+            collections = await self._client[db].list_collection_names()
+
+            if collection not in collections:
+                return False
+            else:
+                return True
+        else:
+            return False
 
 class MongoClientSync(MongoClient):
     # Insertions

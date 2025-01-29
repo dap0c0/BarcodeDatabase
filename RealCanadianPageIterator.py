@@ -1,14 +1,26 @@
 import asyncio
 import time
 import sys
+import os
+import json
+from datetime import datetime, timedelta
 from abc import ABC, abstractmethod
 from DataExtractor import DataExtractor
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from MongoClient import MongoClientAsync
+from MongoClient import MongoClientAsync, CollectionNotFound
 import playwright._impl._errors
 
 class RealCanadianPageIterator(ABC):
+    GROCERY_NAME = "grocery"
+    HOME_BEAUTY_BABY_NAME = "home-beauty-baby"
+    JF_NAME = "joe-fresh"
+    NO_GRID_MESSAGE = "No items are available."
+    DEFAULT_FILE_PATH = "leaves/leaves.json"
+    DEFAULT_INDENT = 4
+    DEFAULT_TIMEOUT_SELECTORS = 10000
+    DEFAULT_TIMEOUT_NAVIGATION = 30000
+
     def __init__(self,
                 playwright,
                 browser: str,
@@ -38,15 +50,11 @@ class RealCanadianPageIterator(ABC):
         self._store_location = store_location
 
     @abstractmethod
-    def crawl(self, workers: int):
-        pass
-
-    @abstractmethod
-    async def _iterate_leaf(self,
-                            page,
-                            workers: int,
-                            page_start: int,
-                            page_end: int):
+    def scrape(self,
+               grocery: bool,
+               hbb: bool,
+               jf: bool,
+               workers: int):
         pass
 
 class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
@@ -59,7 +67,8 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                  slow_mo: int=100,
                  latitude_longitude: tuple=None,
                  permissions: list=None,
-                 store_location: int=None):
+                 store_location: int=None,
+                 leafs_filepath: str=RealCanadianPageIterator.DEFAULT_FILE_PATH):
 
         RealCanadianPageIterator.__init__(self,
                                         playwright,
@@ -72,6 +81,7 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                         permissions,
                                         store_location)
         self._db_client = MongoClientAsync(endpoint_uri)
+        self._leafs_filepath = leafs_filepath
 
     async def initialize(self):
         self._browser = await getattr(self._playwright, self._browser_str).launch(
@@ -82,6 +92,12 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                             self._latitude_longitude,
                                             self._permissions,
                                             self._store_location)
+        
+        # Set the timeout for page navigation.
+        self._context.set_default_navigation_timeout(self.DEFAULT_TIMEOUT_NAVIGATION)
+
+        # Set the timeout for element selectors
+        self._context.set_default_timeout(self.DEFAULT_TIMEOUT_SELECTORS)
 
     def _modify_url(self,
                 url: str,
@@ -112,18 +128,56 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
 
         await self._db_client.bulk_replace(triplets)
 
+    async def _has_product_grid(self, page) -> bool:
+        await page.wait_for_load_state("domcontentloaded")
+        result_queue = asyncio.Queue()
+
+        async def positive():
+            try:
+                await page.wait_for_load_state("domcontentloaded")
+                await page.query_selector('div[data-testid="product-grid"]')
+                await result_queue.put(True)
+
+            except playwright._impl._errors.TimeoutError:
+                await result_queue.put(False)
+
+        async def negative():
+            try:
+                await page.wait_for_load_state("domcontentloaded")
+                await page.query_selector("p.css-1na1tkp")
+                text = await page.inner_text("p.css-1na1tkp")
+
+                if text == self.NO_GRID_MESSAGE:
+                    await result_queue.put(False)
+
+            except playwright._impl._errors.TimeoutError:
+                await result_queue.put(True)
+
+        has_no_grid_task = asyncio.create_task(negative())
+        has_grid_task = asyncio.create_task(positive())
+        result = await result_queue.get()
+
+        if result:
+            has_no_grid_task.cancel()
+            print(f"{page.url} has a grid!")
+        else:
+            has_grid_task.cancel()
+            print(f"{page.url} has no grid!")
+
+        return result
     async def _extract_product_dicts(self,
                                     page) -> list:
-        # Wait for the product grid to be available.
-        await page.wait_for_selector('div[data-testid="product-grid"]')
-        html = await page.inner_html("div.css-1tjthuk")
-        grid_soup = BeautifulSoup(html, "html.parser")
-        
-        # All the children of the product grid are products!
         product_dicts = []
 
-        for product_div in grid_soup.children:
-            product_dicts.append(DataExtractor(product_div).data)
+        # Wait for the product grid to be available.
+        if await self._has_product_grid(page):
+            await page.wait_for_selector('div[data-testid="product-grid"]')
+            html = await page.inner_html("div.css-1tjthuk")
+            grid_soup = BeautifulSoup(html, "html.parser")
+            
+            # All the children of the product grid are products!
+            for product_div in grid_soup.children:
+                product_dicts.append(DataExtractor(product_div).data)
 
         return product_dicts
 
@@ -201,8 +255,138 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
         return context
 
 class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
-    # TODO: fix hardcoded values for desired departments to crawl.
-    async def crawl(self, workers: int):
+    async def scrape(self,
+                     grocery: bool,
+                     hbb: bool,
+                     jf: bool,
+                     workers: int):
+        ''' Scrape every product from every leaf on the website.
+        If <grocery>, <hbb>, and <jf> are not provided, utilize the leafs deserialized
+        from self._leaf_filepath.
+
+        If <grocery>, <hbb> or <jf> is provided, extract every leaf from the website
+        only for the departements passed. After every leaf is extracted,
+        scrape every leaf for the products.
+
+        <workers> defines how many pages can be scraping at once.
+        This number may be tweaked depending on the local machine's
+        tolerance for network traffic.'''
+        leafs_dict = None
+        
+        # Crawl for leaves.
+        if grocery or hbb or jf:
+            leafs_dict = await self._extract_all_leaves(workers, grocery, hbb, jf)
+
+            # Cache all leaves into the file
+            # to make crawling easier in the future.
+            if not os.path.exists(self.DEFAULT_FILE_PATH):
+                os.makedirs(os.path.dirname(self.DEFAULT_FILE_PATH))
+
+            with open(self._leafs_filepath, "w") as wfile:
+                wfile.write(json.dumps(leafs_dict, indent=self.DEFAULT_INDENT))
+
+        # No department was provided.
+        # Read from the leaves file.
+        else:
+            with open(self._leafs_filepath, "r") as rfile:
+                leafs_dict = json.load(rfile)
+
+        # Begin scraping and Writing
+        # each product to the database.
+        await self._scrape_products(leafs_dict, workers)
+
+    # Referenced from Kasravnd in
+    # https://stackoverflow.com/questions/30483977/python-get-yesterdays-date-as-a-string-in-yyyy-mm-dd-format
+    def _yesterday(self) -> str:
+        yesterday = datetime.now() - timedelta(1)
+        return yesterday.strftime("%Y-%m-%d")
+
+    async def _migrate_codes(self,
+                            db_src: str,
+                            col_src: str,
+                            db_dest: str,
+                            col_dest: str):
+        ''' For every product in db_src.col_src with
+        any data (UPC, EAN, etc.), migrate those codes to the
+        respective item in db_dest.col_dest.'''
+        # Verify that the collections exist
+        if not await self._db_client.check_exists_col(db_src, col_src):
+            raise CollectionNotFound(f"{db_src}.{col_src} doesn't exist!")
+
+        if not await self._db_client.check_exists_col(db_dest, col_dest):
+            raise CollectionNotFound(f"{db_dest}.{col_dest} doesn't exist!")
+
+        # Get all documents with code data
+        # from the source collection
+        self._db_client.select_collection(db_src, col_src)
+        code_cursor = await self._db_client.find({
+            "codes": {
+                "$ne": {
+                    "upc": "",
+                    "ean": "",
+                    "plu": ""
+                }
+            }
+        })
+        updates = []
+
+        async for doc in code_cursor:
+            updates.append(({"_id": doc["_id"]}, {"$set": {"codes": doc["codes"]}}))
+
+        print(updates)
+
+        # Update all the code data in
+        # the destination collection
+        # TODO: refactor the client to allow operations without
+        # collection selection. Possibility for bugs due to
+        # the presence of a global (collection).
+        self._db_client.select_collection(db_dest, col_dest)
+        if len(updates) != 0:
+            result = await self._db_client.bulk_update(updates)
+            return result
+
+        return None
+
+    async def _scrape_products(self,
+                               leafs_dict: dict,
+                               workers: int):
+        ''' Scrape data per department and
+        migrate all pre-existing code data
+        from yesterday to today.'''
+        # Start extracting products from every product
+        # page (leaf), per department. Write each product to the respective
+        # database (the department) and the collection (the current date).
+        # For example, A Joe Fresh leaf iterated on Jan 25, 2025 will have documents
+        # uploaded to joe-fresh/2025-01-5.
+        today = time.strftime("%Y-%m-%d")
+        yesterday = self._yesterday()
+
+        for department in leafs_dict:
+            leafs = leafs_dict[department]
+            f"Iterating {len(leafs)} leafs for {department}"
+            self._db_client.select_collection(database=department, collection=today)
+            await self._db_client.create_index("_id")
+            counter = 0
+            
+            for leaf in leafs:
+                sys.stdout.write(f"\r[{counter}/{len(leafs)} leafs iterated] {leaf}\n")
+                page = await self._open_page(self._context, None, leaf)
+                await self._iterate_leaf(page, workers, page_start=1, page_end=None)
+                await page.close()
+                counter += 1
+
+            await self._migrate_codes(department, yesterday, department, today)
+
+    async def _extract_all_leaves(self,
+                                  workers: int,
+                                  grocery: bool,
+                                  home_beauty_baby: bool,
+                                  joe_fresh: bool) -> dict:
+        assert isinstance(workers, int)
+        assert isinstance(grocery, bool)
+        assert isinstance(home_beauty_baby, bool)
+        assert isinstance(joe_fresh, bool)
+        assert grocery or home_beauty_baby or joe_fresh, "No department was provided!"
         root_page = await self._open_page(self._context, None, self._root_url)
         await root_page.wait_for_selector('nav.primary-nav[aria-label="Main navigation"]')
 
@@ -225,47 +409,36 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         assert hbb_ul_tag != None, "No CHABA ul tag was extracted."
         assert jf_ul_tag != None, "No Joe Fresh ul tag was extracted."
 
-        alert = lambda msg: print(f"\n#------ {msg} ------#")
+        alert = lambda msg: print(f"#------ {msg} ------#")
 
         # All relevant department buttons were extracted!
-        # Now, extract the url of all iterable pages (leafs) from these
-        # departments and iterate each and every one of them.
-        # hbb_urls = await self._get_urls_surface(hbb_ul_tag)
-        # alert("Got category urls for CHABA")
+        # Now, extract the urls of all iterable pages (leafs) from these
+        # departments and table them in a dictionary.
+        leafs_dict = dict()
 
-        jf_urls = await self._get_urls_surface(jf_ul_tag)
-        alert("Got category urls for Joe Fresh")
+        # Interestingly, the website stores multiple department products in a
+        # single iterable leaf. It contains Deli, Meals-to-Go, Natural Foods,
+        # actual Grocery, Meat, and Seafood.
+        if grocery:
+            alert("Extracting leaf(s) for Grocery...")
+            grocery_leafs = ["https://www.realcanadiansuperstore.ca/en/food/c/27985"]
+            leafs_dict[self.GROCERY_NAME] = grocery_leafs
 
-        alert("Extracting leafs...")
-        # alert(f"Extracting leafs from CHABA...")
-        # hbb_leafs = await self._extract_leafs_department(hbb_urls, workers)
+        if home_beauty_baby:
+            alert("Extracting category urls for CHABA")
+            hbb_urls = await self._get_urls_surface(hbb_ul_tag)
+            alert(f"Extracting leaf(s) from CHABA...")
+            hbb_leafs = await self._extract_leafs_department(hbb_urls, workers)
+            leafs_dict[self.HOME_BEAUTY_BABY_NAME] = hbb_leafs
 
-        alert(f"Extracting leafs from Joe Fresh...")
-        jf_leafs = await self._extract_leafs_department(jf_urls, workers)
+        if joe_fresh:
+            alert("Extracting category urls for Joe Fresh")
+            jf_urls = await self._get_urls_surface(jf_ul_tag)
+            alert(f"Extracting leaf(s) for Joe Fresh...")
+            jf_leafs = await self._extract_leafs_department(jf_urls, workers)
+            leafs_dict[self.JF_NAME] = jf_leafs
 
-        # Start extracting products from every product
-        # page (leaf), per department. Write each product to the respective
-        # database (the department) and the collection (the current date).
-        # For example, A Joe Fresh leaf iterated on Jan 25, 2025 will have documents
-        # uploaded to joe-fresh/2025-01-5.
-        date = time.strftime("%Y-%m-%d")
-        leafs_list = [
-            # ("grocery", ["https://www.realcanadiansuperstore.ca/en/food/c/27985"]),
-            # ("home-beauty-baby", hbb_leafs),
-            ("joe-fresh", jf_leafs)
-        ]
-        for pair in leafs_list:
-            department, leafs = pair
-            alert(f"Iterating {len(leafs)} leafs for {department}")
-            self._db_client.select_collection(database=department, collection=date)
-            await self._db_client.create_index("_id")
-            counter = 0
-            
-            for leaf in leafs:
-                sys.stdout.write(f"\r[{counter}/{len(leafs)}] leafs iterated.\n")
-                page = await self._open_page(self._context, None, leaf)
-                await self._iterate_leaf(page, workers, page_start=1, page_end=None)
-                counter += 1
+        return leafs_dict
 
     # ------ Extraction of each department ------ #
     async def _get_urls_surface(self, department_tag) -> list:
@@ -394,6 +567,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         try:
             # Wait for the page navigation to be available
             # at the bottom of the page.
+            # await page.wait_for_selector("nav.css-1rb8z0p")
             await page.wait_for_selector("nav.css-1rb8z0p")
             html = await page.inner_html("nav.css-1rb8z0p")
             pagination_soup = BeautifulSoup(html, "html.parser")
@@ -436,7 +610,14 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # is to happen.
         if page_end == None:
             last_page_id = await self._get_last_page(page)
-            page_end = last_page_id
+
+            # There was no pagination element at
+            # the bottom of the page!
+            if not last_page_id:
+                page_end = 1
+
+            else:
+                page_end = last_page_id
             
         # Check whether there are enough pages
         # to distribute among the workers.
@@ -475,12 +656,34 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # and write to our database.
         async def extract_write(page):
             products = await self._extract_product_dicts(page)
-            await self._write_to_db(products)
+            
+            if len(products) != 0:
+                await self._write_to_db(products)
 
         # Get coroutines to gather.
-        iterate_tasks = [self._iterate_leaf_one(await self._open_page(self._context, None, self._modify_url(page.url, intervals[i][0])),
-                                                intervals[i][0], intervals[i][1], extract_write)
-                                                for i in range(len(intervals))]
+        # DEBUGGING CODE
+        async def debug_wrapper(num_pages_iterated,
+                                page,
+                                page_start,
+                                page_end,
+                                page_callback):
+            num_pages = page_end - page_start + 1
+            sys.stdout.write(f"\r{num_pages_iterated[0]}/{num_pages} pages iterated\n")
+
+            if num_pages_iterated[0] == num_pages:
+                sys.stdout.write("\n")
+
+            await self._iterate_leaf_one(page=page,
+                                        page_start = page_start, page_end = page_end,
+                                        page_callback = page_callback)
+            num_pages_iterated[0] += 1
+
+        iterate_tasks = [debug_wrapper(num_pages_iterated=[0],
+                                        page=await self._open_page(self._context, None, self._modify_url(page.url, intervals[i][0])),
+                                        page_start=intervals[i][0],
+                                        page_end=intervals[i][1],
+                                        page_callback=extract_write)
+            for i in range(len(intervals))]
 
         await asyncio.gather(*(iterate_tasks))
 
@@ -501,7 +704,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             # and write it to the database.
             while i <= page_end:
                 await page_callback(page)
-                print(f"[PAGE {i}] extracted from {page.url}")
+                # print(f"[PAGE {i}] extracted from {page.url}")
                 # DEBUGGING CODE
                 if i > 1:
                     assert page.url.split("=")[-1] == str(i)
@@ -691,12 +894,50 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             await baby()
         await no_click()
 
+    async def _test_extract_all_leafs(self):
+        async def extract_grocery():
+            gr_dict = await self._extract_all_leaves(4, True, False, False)
+            breakpoint()
+
+        async def extract_hbb():
+            hbb_dict = await self._extract_all_leaves(4, False, True, False)
+            breakpoint()
+
+        async def extract_jf():
+            jf_dict = await self._extract_all_leaves(4, False, False, True)
+            breakpoint()
+
+        async def extract_all():
+            leafs_dict = await self._extract_all_leaves(4, True, True, True)
+            breakpoint()
+
+        # await extract_grocery()
+        # await extract_hbb()
+        # await extract_jf()
+        await extract_all()
+
     async def _test_extract_products(self):
         self._db_client.select_collection(database="test_db", collection="test_collection")
+
         async def driver(urls: list, num_workers: int):
             for url in urls:
+                print(f"Iterating {url}...")
                 page = await self._open_page(self._context, None, url)
                 await self._iterate_leaf(page, num_workers, page_start=1, page_end=None)
+
+        urls = [
+            "https://www.realcanadiansuperstore.ca/en/food/fruits-vegetables/fresh-fruits/c/28194",
+            "https://www.realcanadiansuperstore.ca/en/food/fruits-vegetables/packaged-salad-dressing/c/28196",
+            "https://www.realcanadiansuperstore.ca/en/food/fruits-vegetables/in-store-salads/c/59222",
+            "https://www.realcanadiansuperstore.ca/en/food/fruits-vegetables/herbs/c/28197",
+            "https://www.realcanadiansuperstore.ca/en/baby/baby-food-snacks/cereal/c/46860",
+            "https://www.realcanadiansuperstore.ca/en/food/dairy-eggs/butter-spreads/c/28220",
+            "https://www.realcanadiansuperstore.ca/en/personal-care-beauty/oral-care/c/59770"
+        ]
+        # Iterate through each leaf with 1 - 4 workers.
+        for i in range(1, 4 + 1):
+            print(f"Testing with {i} worker(s).")
+            await driver(urls, i)
 
         async def workers_lt_pages():
             urls = [

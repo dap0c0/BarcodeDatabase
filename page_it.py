@@ -1,88 +1,70 @@
 #! /opt/homebrew/bin/python3.11
-from playwright.sync_api import sync_playwright
+from pymongo.errors import ServerSelectionTimeoutError
 from playwright.async_api import async_playwright
 from RealCanadianPageIterator import RealCanadianPageIteratorAsyncDiv
 import argparse
 import asyncio
-import time
+import sys
 
 FOOD_PAGE_URL = "https://www.realcanadiansuperstore.ca/en/food/c/27985"
+DEFAULT_WORKERS = 4
+
 
 if __name__ == "__main__":
-    async def production_code():
-        # Get the filename and root/seed
-        # url from the cmd line.
-        parser = argparse.ArgumentParser(description="Basic iterative webscraper for the Real" + \
-                                        "Canadian Superstore website")
-        parser.add_argument("--uri", "-u", action="store", dest="uri", type=str, required=True)
-        parser.add_argument("-s", "--seed", action="store", dest="seed", type=str, default=FOOD_PAGE_URL)
-        parser.add_argument("-w", "--workers", action="store", dest="workers", type=int, default=5)
-        parser.add_argument("-db", "--database", action="store", dest="database", type=str, required=True)
-        parser.add_argument("-col", "--collection", action="store", dest="collection", type=str, required=True)
+    # Get the filename and root/seed
+    # url from the cmd line.
+    parser = argparse.ArgumentParser(description="Basic iterative webscraper for the Real" + \
+                                    "Canadian Superstore website")
+    parser.add_argument("--item-server-uri", "-isuri", action="store", dest="isuri", type=str, required=True)
+    parser.add_argument("-s", "--seed", action="store", dest="seed", type=str, default=FOOD_PAGE_URL)
+    parser.add_argument("-w", "--workers", action="store", dest="workers", type=int, default=DEFAULT_WORKERS)
+    
+    # Allow the user to control which departments to scrape.
+    # If no department is supplied, allow the page iterator
+    # to use the leaf cache json file.
+    parser.add_argument("--grocery", action="store_true", dest="grocery")
+    parser.add_argument("--home-beauty-baby", action="store_true", dest="home_beauty_baby")
+    parser.add_argument("--joe-fresh", action="store_true", dest="joe_fresh")
 
-        # Get the start and end pages (end is inclusive)
-        parser.add_argument("-b", "--begin", action="store", dest="begin", type=int)
-        parser.add_argument("-e", "--end", action="store", dest="end", type=int)
+    # Get the values
+    args = parser.parse_args()
+    isuri = args.isuri
+    seed = args.seed
+    workers = args.workers
+    grocery = args.grocery
+    home_beauty_baby = args.home_beauty_baby
+    joe_fresh = args.joe_fresh
 
-        # Get the values
-        args = parser.parse_args()
-        uri = args.uri
-        seed = args.seed
-        workers = args.workers
-        database = args.database
-        collection = args.collection
-        begin = args.begin
-        end = args.end
-
-        # Assert that begin and end are
-        # provided together!
-        # Formally, check that begin implies end and
-        # the converse. (begin <-> end)
-        if (begin is None) != (end is None):
-            parser.error("Begin and End page must be provided together.")
-        
-        # Open an asynchronous chromium browser
-        async def run_async():
-            async with async_playwright() as p:
+    # Open an asynchronous chromium browser
+    async def run_async():
+        async with async_playwright() as p:
+            try:
                 pi = RealCanadianPageIteratorAsyncDiv(playwright=p,
                                                 browser="chromium",
-                                                endpoint_uri=uri,
-                                                database=database,
-                                                collection=collection,
+                                                endpoint_uri=isuri,
                                                 root_url=seed,
                                                 headless=True,
                                                 slow_mo=0,
                                                 latitude_longitude=(49.8938887, -97.1886292),
                                                 permissions=["geolocation"],
                                                 store_location=1511)
-                await pi.initialize()
-                start = time.perf_counter()
-                await pi.iterate_pages(workers, begin, end)
-                total = time.perf_counter() - start
-                print(f"{begin} to {end} iterated in {total}s")
+                sys.stdout.write(f"Connection to {isuri} is valid!")
+                
+            except ServerSelectionTimeoutError:
+                sys.stderr.write(f"Failed to connect to {isuri}\n")
+                sys.exit()
 
-        asyncio.run(run_async())
-
-    # TESTING
-    async def run_tests():
-        async with async_playwright() as p:
-            pi = RealCanadianPageIteratorAsyncDiv(playwright=p,
-                                                        browser="chromium",
-                                                        endpoint_uri="foo",
-                                                        database="foo",
-                                                        collection="foo",
-                                                        root_url="https://www.realcanadiansuperstore.ca/en/tourti-re/p/21478018_EA?source=nspt",
-                                                        headless=False,
-                                                        slow_mo=0,
-                                                        latitude_longitude=(49.8938887, -97.1886292),
-                                                        permissions=["geolocation"],
-                                                        store_location=1511)
+            # The connection to the item server is valid.
+            # Initialize browser context, and start scraping.
+            # If grocery, hbb, and joe_fresh are all false,
+            # use the file generated in leaves/leaves.json to then
+            # continue with product extraction.
+            #
+            # If any of grocery, hbb, or joe_fresh is provided,
+            # extract all leaves from the supplied departments,
+            # cache those leaves into leaves/leaves.json for future convenience,
+            # and then start extracting products from all leaves.
             await pi.initialize()
-            # await pi._test_one_page_with_pagination()
-            # await pi._test_one_page_no_pagination()
-            # await pi._test_multiple_urls()
-            # await pi._test_extract_leafs()
-            await pi.crawl()
+            await pi.scrape(grocery, home_beauty_baby, joe_fresh, workers)
 
-
-    asyncio.run(run_tests())
+    asyncio.run(run_async())
