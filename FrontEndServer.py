@@ -19,6 +19,7 @@ import base64
 import io
 import json
 import re
+from RealCanadianPageIterator import RealCanadianPageIteratorAsync
 
 HTTP_PORT = 80
 ITEM_SERVER_HTTPS_PORT = 1931
@@ -268,9 +269,6 @@ class HomePage(SecureResource):
                                         {self._generate_link("Search", "/search")}
                                     </div>
                                     <div>
-                                        {self._generate_link("Edit database", "/edit_database")}
-                                    </div>
-                                    <div>
                                         {self._generate_link("Barcode Bruteforcer", "/barcode_bruteforcer")}
                                     </div>
                                 </body>
@@ -459,18 +457,14 @@ class SearchPage(SecureResource):
     INVALID_CHARS = "{}[]()<>^"
     MAX_REGEX_SIZE = 500
 
-    def __init__(self, auth_server_url: str,
-                 api_url: str,
-                 database: str,
-                 collection: str):
+    def __init__(self,
+                 auth_server_url: str,
+                 api_url: str):
         assert isinstance(auth_server_url, str)
         assert isinstance(api_url, str)
-        assert isinstance(database, str)
-        assert isinstance(collection, str)
         SecureResource.__init__(self, auth_server_url)
         self._api_url = api_url
         self._db_client = MongoClientSync(api_url)
-        self._db_client.select_collection(database, collection)
 
     def render_GET(self, request: Request):
         ''' Allow the user to input information
@@ -503,12 +497,18 @@ class SearchPage(SecureResource):
         def check_query(http_response: HTTPResponse):
             search_query = request.args[b"search"][0].decode("utf-8")
             search_query = html.escape(search_query)
-            return search_query
+            department_selected = request.args[b"department"][0].decode("utf-8")
+            department_selected = html.escape(department_selected)
+            return (search_query, department_selected)
 
         # Errback:
         # Token has been authenticated! Display the
         # page html to the client.
         def render_page(_):
+            valid_databases = [RealCanadianPageIteratorAsync.GROCERY_NAME,
+                               RealCanadianPageIteratorAsync.HOME_BEAUTY_BABY_NAME,
+                               RealCanadianPageIteratorAsync.JF_NAME]
+            options_html = "\n".join(f'<option value="{db}">{db}</option>' for db in valid_databases)
             to_render = f'''<!DOCTYPE HTML>
                             <html>
                                 <head>
@@ -523,6 +523,11 @@ class SearchPage(SecureResource):
                                             <input type="text" name="search" placeholder="Search..."/>
                                         </div>
                                         <div>
+                                            <select id="department" name="department">
+                                                {options_html}
+                                            </select>
+                                        </div>
+                                        <div>
                                             <button type="submit"></button>
                                         </div>
                                     </form>
@@ -533,8 +538,16 @@ class SearchPage(SecureResource):
 
         # Callback:
         # Query the item server to perform a recursive search
-        def search_database(search_query: str):
+        def search_database(query_department_pair: tuple):
+            search_query, department = query_department_pair
             print(f"Search query: {search_query}")
+            print(f"Department: {department}")
+
+            # Select the department in the database.
+            # Always choose the most recent collection (today)
+            # per department.
+            today = RealCanadianPageIteratorAsync.today()
+            self._db_client.select_collection(department, today)
             query_matches = {}
 
             if search_query != None:
@@ -658,24 +671,19 @@ class SearchPage(SecureResource):
 
 
 if __name__ == "__main__":
-    auth_server_uri = AUTH_SERVER_URL
     # Get the mongodb endpoint for our item server.
     parser = argparse.ArgumentParser()
     parser.add_argument("--item_server_uri", "-isuri", action="store", type=str, dest="item_server_uri", required=True)
-    parser.add_argument("-db", "--database", action="store", type=str, dest="database", required=True)
-    parser.add_argument("-col", "--collection", action="store", type=str, dest="collection", required=True)
     parser.add_argument("--auth_server_uri", "-asuri", action="store", type=str, dest="auth_server_uri", required=True)
     args = parser.parse_args()
     item_server_uri = args.item_server_uri
     auth_server_uri = args.auth_server_uri
-    database = args.database
-    collection = args.collection
 
     # Construct the web tree
     root = Resource()
     root.putChild(b"login", LoginPage(auth_server_uri))
     root.putChild(b"home", HomePage(auth_server_uri))
-    root.putChild(b"search", SearchPage(auth_server_uri, item_server_uri, database, collection))
+    root.putChild(b"search", SearchPage(auth_server_uri, item_server_uri))
     root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage(auth_server_uri))
 
     # Serve the web tree
