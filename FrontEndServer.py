@@ -11,7 +11,10 @@ from zope.interface import Interface, Attribute, implementer
 from twisted.web.resource import Resource
 from twisted.web.http import Request
 from twisted.internet.defer import Deferred
+from twisted.python.failure import Failure
 from twisted.internet import reactor, endpoints, ssl
+from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME, today
+from functools import partial
 import argparse
 import urllib.parse
 import html
@@ -19,7 +22,6 @@ import base64
 import io
 import json
 import re
-from RealCanadianPageIterator import RealCanadianPageIteratorAsync
 
 HTTP_PORT = 80
 ITEM_SERVER_HTTPS_PORT = 1931
@@ -38,61 +40,7 @@ class Cookie(object):
 # Allow cookie values to persist across sessions.
 registerAdapter(Cookie, Session, ICookie)
 
-class SecureResource(Resource, ABC):
-    def __init__(self, auth_server_url: str):
-        assert isinstance(auth_server_url, str)
-        self._auth_server_url = auth_server_url
-
-    def _verify_session(self,
-                        request: Request,
-                        username: str=None,
-                        password: str=None,
-                        auth_server_url: str=None,
-                        ) -> Deferred:
-        ''' Query the authentication server endpoint and
-        attempt to authenticate the current session.
-
-        If the client doesn't currently have a session token,
-        the authentication server will provide it upon verification
-        through a set cookie header.
-
-        If the client has a session token, the authentication server
-        will resend the session token.
-
-        If verification fails, no bytes will be returned.
-        '''
-        # Query the item server to perform a recursive search
-        headers = {}
-        headers["Connection"] = "close"
-
-        # If the client has a session cookie,
-        # include that in the request. In a way,
-        # the front-end server acts as a proxy.
-        session = request.getSession()
-        session_id = ICookie(session).value
-        session_cookies = None
-
-        if session_id != None:
-            session_cookies = {}
-            session_cookies[AuthServerCookie.SESSION_COOKIE_NAME] = session_id
-
-        if username and password:
-            auth_b64 = self._generate_auth_basic(username, password)
-            headers["Authorization"] = f"Basic {auth_b64}"
-
-        d = self._promise_http(url=auth_server_url, cookies_dict=session_cookies, headers_dict=headers, debug=True)
-        return d
-
-    def _generate_auth_basic(self,
-                             username: str,
-                             password: str) -> str:
-        ''' Generate the base64 token of
-        "<username>:<password>"'''
-        assert isinstance(username, str)
-        assert isinstance(password, str)
-        temp = f"{username}:{password}"
-        return base64.b64encode(bytes(temp, "utf-8")).decode("utf-8")
-
+class HTTPResource(Resource, ABC):
     def _promise_http(self,
                       url: str,
                       cookies_dict: dict=None,
@@ -156,6 +104,82 @@ class SecureResource(Resource, ABC):
 
             return d
 
+class SecureResource(HTTPResource, ABC):
+    ''' Limit access to the resource based on the
+    auth server.'''
+    def __init__(self, auth_server_url: str):
+        assert isinstance(auth_server_url, str)
+        self._auth_server_url = auth_server_url
+
+    # Authentication has failed! Redirect the client
+    # to the login page.
+    def redirect_login(self,
+                       err,
+                       request):
+        request.redirect(url="/login")
+        request.finish()
+
+    def _verify_session(self,
+                        request: Request,
+                        username: str=None,
+                        password: str=None,
+                        auth_server_url: str=None,
+                        ) -> Deferred:
+        ''' Query the authentication server endpoint and
+        attempt to authenticate the current session.
+
+        If the client doesn't currently have a session token,
+        the authentication server will provide it upon verification
+        through a set cookie header.
+
+        If the client has a session token, the authentication server
+        will resend the session token.
+
+        If verification fails, no bytes will be returned.
+        '''
+        # Query the item server to perform a recursive search
+        headers = {}
+        headers["Connection"] = "close"
+
+        # If the client has a session cookie,
+        # include that in the request. In a way,
+        # the front-end server acts as a proxy.
+        session = request.getSession()
+        session_id = ICookie(session).value
+        session_cookies = None
+
+        if session_id != None:
+            session_cookies = {}
+            session_cookies[AuthServerCookie.SESSION_COOKIE_NAME] = session_id
+
+        if username and password:
+            auth_b64 = self._generate_auth_basic(username, password)
+            headers["Authorization"] = f"Basic {auth_b64}"
+
+        d = self._promise_http(url=auth_server_url, cookies_dict=session_cookies, headers_dict=headers, debug=True)
+
+        # Callback:
+        # display content of response for debugging.
+        # If the auth server's response is empty,
+        # authentication failed.
+        def print_response(http_response: HTTPResponse):
+            reactor.callWhenRunning(print, f"Response is {http_response}")
+            assert len(http_response) > 0
+            return http_response
+
+        d.addCallback(print_response)
+        return d
+
+    def _generate_auth_basic(self,
+                             username: str,
+                             password: str) -> str:
+        ''' Generate the base64 token of
+        "<username>:<password>"'''
+        assert isinstance(username, str)
+        assert isinstance(password, str)
+        temp = f"{username}:{password}"
+        return base64.b64encode(bytes(temp, "utf-8")).decode("utf-8")
+
 class LoginPage(SecureResource):
     def _generate_login_forms(self):
         ''' Generate html for login page.
@@ -192,18 +216,10 @@ class LoginPage(SecureResource):
         password = html.escape(password)
         
         # Callback:
-        # display content of response for debugging.
-        # If the auth server's response is empty,
-        # authentication failed.
-        def print_response(http_response: HTTPResponse):
-            reactor.callWhenRunning(print, f"Response is {http_response}")
-            assert len(http_response) > 0
-            return str(http_response) # Push the content of the response
-
-        # Callback:
         # Authentication has passed! Set the token
         # as session_id for the client.
-        def set_session_cookie(token: str):
+        def set_session_cookie(http_response: HTTPResponse):
+            token = str(http_response)
             assert isinstance(token, str)
             assert len(token) > 0
             print(f"Setting session cookie as {token}")
@@ -213,28 +229,41 @@ class LoginPage(SecureResource):
 
         # Callback:
         # Redirect the client to the home page.
-        def redirect_home(data: object):
-            request.redirect(url="/home")
+        def redirect_home(_):
+            request.redirect(url="/")
             request.finish()
 
-        # Errback:
-        # authentication has failed! Redirect the client
-        # to the login page.
-        def redirect_login(err):
-            print(f"Redirecting login!")
-            request.redirect(url="/login")
-            request.finish()
-            
         # Verify that the parameters are correct.
         # If so, add the session id to our handler.
         d = self._verify_session(request, username, password, self._auth_server_url)
-        d.addCallback(print_response)
         d.addCallback(set_session_cookie)
         d.addCallback(redirect_home)
-        d.addErrback(redirect_login)
+        d.addErrback(self.redirect_login, request=request)
         return NOT_DONE_YET
 
-class HomePage(SecureResource):
+class HomePage(HTTPResource):
+    # Token has been authenticated! Display the
+    # page html to the client.
+    def render_page(self, http_response: HTTPResponse | None, request):
+        assert isinstance(http_response, HTTPResponse) or http_response == None
+        request.write(f'''<!DOCTYPE html>
+                        <html>
+                            <head>
+                                <meta charset='utf-8'>
+                                <title>
+                                </title>
+                            </head>
+                            <body>
+                                <div>
+                                    {self._generate_link("Search", "/search")}
+                                </div>
+                                <div>
+                                    {self._generate_link("Barcode Bruteforcer", "/barcode_bruteforcer")}
+                                </div>
+                            </body>
+                        </html>'''.encode("utf-8"))
+        request.finish()
+
     def _generate_link(self, link_text: str, redirect: str):
         assert isinstance(link_text, str)
         assert isinstance(redirect, str)
@@ -242,58 +271,99 @@ class HomePage(SecureResource):
 
     def render_GET(self, request):
         '''Allow user to navigate between search and data addition.'''
+
+        # Define the callback chain
+        d = Deferred()
+        d.addCallback(self.render_page, request=request)
+
+        # Fire the callback chain off!
+        d.callback(None)
+        return NOT_DONE_YET
+
+class SecureHomePage(HomePage, SecureResource):
+    def render_GET(self, request):
+        '''Allow user to navigate between search and data addition.'''
         d = self._verify_session(request, auth_server_url=self._auth_server_url)
+        d.addCallback(self.render_page, request=request)
+        d.addErrback(self.redirect_login, request=request)
+        return NOT_DONE_YET
 
-        # Callback:
-        # display content of response for debugging.
-        # If the auth server's response is empty,
-        # authentication failed.
-        def print_response(http_response: HTTPResponse):
-            reactor.callWhenRunning(print, f"Response is {http_response}")
-            assert len(http_response) > 0
-            return str(http_response) # Push the content of the response
+class BarcodeBruteforcerPage(HTTPResource):
+    def __init__(self):
+        self._bc_generator = UPCBarcodeGenerator(50, add_checksum=False)
+        self._pat_extractor = PatternExtractor()
 
-        # Callback:
-        # Token has been authenticated! Display the
-        # page html to the client.
-        def render_page(data: str):
-            request.write(f'''<!DOCTYPE html>
+    # Display the page to the user!
+    def render_page(self, _, request):
+        html = self._generate_html()
+        request.write(html.encode("utf-8"))
+        request.finish()
+
+    # Display all possible barcodes on the page.
+    # E.g, for 012345x23450, display the barcodes of
+    # 012345023450, 012345123450, ...
+    def render_barcodes(self, upc_barcode: str, request):
+        if upc_barcode != None:
+
+            def find_char(string: str, charset: list):
+                i = 0
+                
+                for c in upc_barcode:
+                    if c in charset:
+                        return i
+
+                    i += 1
+                return None
+
+            # Locate index of x
+            x_index = find_char(upc_barcode, ["x", "X"])
+
+            # Write all barcodes into streams
+            streams = []
+
+            for i in range(10):
+                stream = io.BytesIO()
+                curr_barcode = upc_barcode[:x_index] + str(i) + upc_barcode[x_index + 1:]
+                self._bc_generator.write(curr_barcode, stream)
+                streams.append(stream)
+
+            # Render them all onto the page
+            to_render = f'''<!DOCTYPE HTML>
                             <html>
                                 <head>
                                     <meta charset='utf-8'>
                                     <title>
                                     </title>
                                 </head>
-                                <body>
-                                    <div>
-                                        {self._generate_link("Search", "/search")}
-                                    </div>
-                                    <div>
-                                        {self._generate_link("Barcode Bruteforcer", "/barcode_bruteforcer")}
-                                    </div>
-                                </body>
-                            </html>'''.encode("utf-8"))
+                                <body>'''
+            
+            for stream in streams:
+                to_render += str(stream.getvalue(), "utf-8")
+                stream.close()
+
+            to_render += '''<body>
+                        </html>'''
+            request.write(to_render.encode("utf-8"))
             request.finish()
 
-        # Errback:
-        # authentication has failed! Redirect the client
-        # to the login page.
-        def redirect_login(err):
-            print(f"Redirecting login!")
-            request.redirect(url="/login")
-            request.finish()
+    # Verify that the client input is valid!
+    # The barcode must be 12 digits total
+    # (including the x).
+    def check_input(self, _, request):
+        upc_barcode = request.args[b"upc_barcode"][0].decode("utf-8")
+        
+        # Check length of the input
+        assert len(upc_barcode) == 12
 
-        d.addCallback(print_response)
-        d.addCallback(render_page)
-        d.addErrback(redirect_login)
-        return NOT_DONE_YET
+        # Verify the input charset
+        valid_pattern = r"(?:\d*[xX]*\d*)"
+        self._pat_extractor.set_pattern(valid_pattern)
+        print(f"Matches: {self._pat_extractor.get_matches(upc_barcode)}")
+        assert len(self._pat_extractor.get_matches(upc_barcode)) != 0
 
-class BarcodeBruteforcerPage(SecureResource):
-    def __init__(self,
-                 auth_server_url: str):
-        SecureResource.__init__(self, auth_server_url)
-        self._bc_generator = UPCBarcodeGenerator(50, add_checksum=False)
-        self._pat_extractor = PatternExtractor()
+        # All checks passed! Bubble upc_barcode
+        # for further processing
+        return upc_barcode
 
     def _generate_html(self):
         to_render = f'''<!DOCTYPE HTML>
@@ -321,193 +391,92 @@ class BarcodeBruteforcerPage(SecureResource):
         ''' Allow the user to input a UPC barcode (12 digits),
         with an x signifying a missing digit.'''
 
-        # Callback
-        # Check that the token is valid.
-        # The auth server echoes the token
-        # if the client is authenticated.
-        def check_token(http_response: HTTPResponse):
-            assert len(http_response) > 0
-            return str(http_response)
-
-        # Callback
-        # Display the page to the user!
-        def render_page(_):
-            html = self._generate_html()
-            request.write(html.encode("utf-8"))
-            request.finish()
-
-        # Errback
-        # The client isn't authenticated!
-        # Redirect them to the login page
-        def redirect_login(err):
-            print(f"Redirecting login!")
-            request.redirect(url="/login")
-            request.finish()
-            
-        d = self._verify_session(request, auth_server_url=self._auth_server_url)
-        d.addCallback(check_token)
-        d.addCallbacks(render_page, redirect_login)
+        d = Deferred()
+        d.addCallback(self.render_page, request=request)
+        d.callback(None)
         return NOT_DONE_YET
         
     def render_POST(self, request: Request):
         ''' With the inputted UPC barcode (11 digits with x),
         dynamically generate all barcodes and display on the page.'''
 
-        # Callback
-        # Check that the authentication token is valid.
-        # The auth server echoes the token
-        # if the client is authenticated.
-        def check_token(http_response: HTTPResponse):
-            assert len(http_response) > 0
-            return str(http_response)
+        d = Deferred()
+        d.addCallback(self.check_input, request=request)
+        d.addCallbacks(self.render_barcodes, self.render_page,
+                    callbackKeywords={"request": request}, errbackKeywords={"request": request})
+        d.callback(None)
+        return NOT_DONE_YET
 
-        # Callback:
-        # Verify that the client input is valid!
-        # The barcode must be 12 digits total
-        # (including the x).
-        def check_input(_):
-            upc_barcode = request.args[b"upc_barcode"][0].decode("utf-8")
-            
-            # Check length of the input
-            assert len(upc_barcode) == 12
+class SecureBarcodeBruteforcerPage(BarcodeBruteforcerPage, SecureResource):
+    def __init__(self, auth_server_url: str):
+        BarcodeBruteforcerPage.__init__(self)
+        SecureResource.__init__(self, auth_server_url)
 
-            # Verify the input charset
-            valid_pattern = r"(?:\d*[xX]*\d*)"
-            self._pat_extractor.set_pattern(valid_pattern)
-            print(f"Matches: {self._pat_extractor.get_matches(upc_barcode)}")
-            assert len(self._pat_extractor.get_matches(upc_barcode)) != 0
-
-            # All checks passed! Bubble upc_barcode
-            # for further processing
-            return upc_barcode
-
-        # Errback:
-        # The input is invalid! Force the user
-        # to reinput their barcode.
-        def render_page(_):
-            html = self._generate_html()
-            request.write(html.encode("utf-8"))
-            request.finish()
-
-        # Callback:
-        # Display all possible barcodes on the page.
-        # E.g, for 012345x23450, display the barcodes of
-        # 012345023450, 012345123450, ...
-        def render_barcodes(upc_barcode: str):
-            if upc_barcode != None:
-
-                def find_char(string: str, charset: list):
-                    i = 0
-                    
-                    for c in upc_barcode:
-                        if c in charset:
-                            return i
-
-                        i += 1
-                    return None
-
-                # Locate index of x
-                x_index = find_char(upc_barcode, ["x", "X"])
-
-                # Write all barcodes into streams
-                streams = []
-
-                for i in range(10):
-                    stream = io.BytesIO()
-                    curr_barcode = upc_barcode[:x_index] + str(i) + upc_barcode[x_index + 1:]
-                    self._bc_generator.write(curr_barcode, stream)
-                    streams.append(stream)
-
-                # Render them all onto the page
-                to_render = f'''<!DOCTYPE HTML>
-                                <html>
-                                    <head>
-                                        <meta charset='utf-8'>
-                                        <title>
-                                        </title>
-                                    </head>
-                                    <body>'''
-                
-                for stream in streams:
-                    to_render += str(stream.getvalue(), "utf-8")
-                    stream.close()
-
-                to_render += '''<body>
-                            </html>'''
-                request.write(to_render.encode("utf-8"))
-                request.finish()
-
-        # Errback:
-        # The client isn't authenticated!
-        # Redirect them to the login page
-        def redirect_login(err):
-            print(f"Redirecting login!")
-            request.redirect(url="/login")
-            request.finish()
+    def render_GET(self, request: Request):
+        ''' Allow the user to input a UPC barcode (12 digits),
+        with an x signifying a missing digit.'''
 
         d = self._verify_session(request, auth_server_url=self._auth_server_url)
-        d.addCallback(check_token)
-        d.addCallbacks(check_input, redirect_login)
-        d.addCallbacks(render_barcodes, render_page)
+        d.addCallbacks(self.render_page, self.redirect_login,
+                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
         return NOT_DONE_YET
-        
+
+    def render_POST(self, request: Request):
+        ''' With the inputted UPC barcode (11 digits with x),
+        dynamically generate all barcodes and display on the page.'''
+
+        d = self._verify_session(request, auth_server_url=self._auth_server_url)
+        d.addCallbacks(self.check_input, self.redirect_login,
+                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
+        d.addCallbacks(self.render_barcodes, self.render_page,
+                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
+        return NOT_DONE_YET
  
-class SearchPage(SecureResource):
+class SearchPage(HTTPResource):
     INDENT_SPACES = 4
     INVALID_CHARS = "{}[]()<>^"
     MAX_REGEX_SIZE = 500
 
     def __init__(self,
-                 auth_server_url: str,
                  api_url: str):
-        assert isinstance(auth_server_url, str)
-        assert isinstance(api_url, str)
-        SecureResource.__init__(self, auth_server_url)
         self._api_url = api_url
         self._db_client = MongoClientSync(api_url)
 
-    def render_GET(self, request: Request):
-        ''' Allow the user to input information
-            into a search bar to perform
-            a recursive grep search.
+    def render_GET(self,
+                   request):
+        # Define chain of events
+        d = Deferred()
+        d.addCallback(self.check_query, request=request)
+        d.addCallbacks(self.search_database, self.render_page,
+                    callbackKeywords={"request": request}, errbackKeywords={"request": request})
+        d.addCallback(self.display_json, request=request)
 
-            For all items returned in the search page,
-            table them and display hyperlinks to each page.'''
+        # Fire off chain of events
+        d.callback(None)
+        return NOT_DONE_YET
 
-        # Callback:
-        # Display content of response for debugging.
-        # If the auth server's response is empty,
-        # authentication failed.
-        def print_response(http_response: HTTPResponse):
-            reactor.callWhenRunning(print, f"Response is {http_response}")
-            assert len(http_response) > 0
-            return str(http_response) # Push the content of the response
+    # Check whether there was a query sent
+    # in the request.
+    def check_query(self,
+                    http_response: HTTPResponse,
+                    request):
+        assert isinstance(http_response, HTTPResponse) or http_response == None
+        search_query = request.args[b"search"][0].decode("utf-8")
+        search_query = html.escape(search_query)
+        department_selected = request.args[b"department"][0].decode("utf-8")
+        department_selected = html.escape(department_selected)
+        print(f"{search_query} {department_selected}")
+        return (search_query, department_selected)
 
-        # Errback:
-        # Authentication has failed! Redirect the client
-        # to the login page.
-        def redirect_login(err):
-            print(f"Redirecting login!")
-            request.redirect(url="/login")
-            request.finish()
-
-        # Callback:
-        # Check whether there was a query sent
-        # in the request.
-        def check_query(http_response: HTTPResponse):
-            search_query = request.args[b"search"][0].decode("utf-8")
-            search_query = html.escape(search_query)
-            department_selected = request.args[b"department"][0].decode("utf-8")
-            department_selected = html.escape(department_selected)
-            return (search_query, department_selected)
-
-        # Errback:
-        # Token has been authenticated! Display the
-        # page html to the client.
-        def render_page(_):
-            valid_databases = [RealCanadianPageIteratorAsync.GROCERY_NAME,
-                               RealCanadianPageIteratorAsync.HOME_BEAUTY_BABY_NAME,
-                               RealCanadianPageIteratorAsync.JF_NAME]
+    # Display the
+    # page html to the client.
+    def render_page(self,
+                    failure: Failure,
+                    request):
+        if isinstance(failure, Failure):
+            valid_databases = [GROCERY_NAME,
+                                HOME_BEAUTY_BABY_NAME,
+                                JF_NAME]
             options_html = "\n".join(f'<option value="{db}">{db}</option>' for db in valid_databases)
             to_render = f'''<!DOCTYPE HTML>
                             <html>
@@ -536,53 +505,48 @@ class SearchPage(SecureResource):
             request.write(to_render.encode("utf-8"))
             request.finish()
 
-        # Callback:
-        # Query the item server to perform a recursive search
-        def search_database(query_department_pair: tuple):
-            search_query, department = query_department_pair
-            print(f"Search query: {search_query}")
-            print(f"Department: {department}")
+    # Query the item server to perform a recursive search
+    def search_database(self,
+                        query_department: tuple,
+                        request):
+        assert isinstance(query_department, tuple)
+        assert len(query_department) == 2
+        search_query, department = query_department
+        assert isinstance(search_query, str)
+        assert isinstance(department, str)
+        print(f"Search query: {search_query}")
+        print(f"Department: {department}")
 
-            # Select the department in the database.
-            # Always choose the most recent collection (today)
-            # per department.
-            today = RealCanadianPageIteratorAsync.today()
-            self._db_client.select_collection(department, today)
-            query_matches = {}
+        # Select the department in the database.
+        # Always choose the most recent collection (today)
+        # per department.
+        todays_date = today()
+        self._db_client.select_collection(department, todays_date)
+        query_matches = {}
 
-            if search_query != None:
-                api_url = self._api_url
-                headers = {}
-                headers["Connection"] = "close"
-                cookies = {}
-                session_cookie = ICookie(request.getSession()).value
-                cookies[SESSION_ID_KEY] = session_cookie
-                print(f"Cookies are {cookies}")
+        if search_query != None:
+            headers = {}
+            headers["Connection"] = "close"
+            cookies = {}
+            session_cookie = ICookie(request.getSession()).value
+            cookies[SESSION_ID_KEY] = session_cookie
 
-                # Get all matches for the query.
-                cursor = self._db_client.find(None)
-                items = [item for item in cursor]
-                query_matches = {item["_id"]: item for item in self._get_matches(search_query, items)}
-                d.addCallback(display_json)
+            # Get all matches for the query.
+            cursor = self._db_client.find({})
+            items = [item for item in cursor]
+            query_matches = {item["_id"]: item for item in self._get_matches(search_query, items)}
 
-            return query_matches
+        return query_matches
 
-        # Callback:
-        # Pretty print all data for the client on the page.
-        def display_json(data: dict):
-            request.write(b"<pre>" + bytes(json.dumps(data, indent=4), "utf-8") + b"</pre>")
-            request.finish()
+    # Pretty print all data for the client on the page.
+    def display_json(self,
+                     data: dict,
+                     request):
+        assert isinstance(data, dict)
+        request.write(b"<pre>" + bytes(json.dumps(data, indent=4), "utf-8") + b"</pre>")
+        request.finish()
 
-        # Start processing!
-        d = self._verify_session(request, auth_server_url=self._auth_server_url)
-        d.addCallback(print_response)
-        d.addCallbacks(check_query, redirect_login)
-        d.addCallbacks(search_database, render_page)
-        d.addCallback(display_json)
-
-        return NOT_DONE_YET
-
-    # <------- Helper Functions ------>
+        # <------- Helper Functions ------>
     def _check_valid_regex(self, regex):
         ''' Check whether the regex string
         qualifies for search.'''
@@ -669,22 +633,66 @@ class SearchPage(SecureResource):
 
         return matches
 
+class SecureSearchPage(SearchPage, SecureResource):
+    def __init__(self,
+                 auth_server_url: str,
+                 api_url: str):
+        assert isinstance(auth_server_url, str)
+        assert isinstance(api_url, str)
+        SecureResource.__init__(self, auth_server_url)
+        SearchPage.__init__(self, api_url)
 
+    def render_GET(self, request: Request):
+        ''' Allow the user to input information
+            into a search bar to perform
+            a recursive grep search.
+
+            For all items returned in the search page,
+            table them and display hyperlinks to each page.'''
+
+        # Start processing!
+        d = self._verify_session(request, auth_server_url=self._auth_server_url)
+        d.addCallbacks(self.check_query, self.redirect_login, 
+                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
+        d.addCallbacks(self.search_database, self.render_page,
+                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
+        d.addCallback(self.display_json, request=request)
+        return NOT_DONE_YET
+
+# -------- MAIN PROGRAM -------- #
+def get_web_tree_no_auth(item_server_uri):
+    root = Resource()
+    # root.putChild(b"", HomePage())
+    root.putChild(b"", HomePage())
+    root.putChild(b"search", SearchPage(item_server_uri))
+    root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage())
+    return root
+
+def get_web_tree_auth(item_server_uri: str, auth_server_uri: str):
+    root = Resource()
+    root.putChild(b"login", LoginPage(auth_server_uri))
+    root.putChild(b"", SecureHomePage(auth_server_uri))
+    root.putChild(b"search", SecureSearchPage(auth_server_uri, item_server_uri))
+    root.putChild(b"barcode_bruteforcer", SecureBarcodeBruteforcerPage(auth_server_uri))
+    return root
+
+    
 if __name__ == "__main__":
     # Get the mongodb endpoint for our item server.
     parser = argparse.ArgumentParser()
     parser.add_argument("--item_server_uri", "-isuri", action="store", type=str, dest="item_server_uri", required=True)
-    parser.add_argument("--auth_server_uri", "-asuri", action="store", type=str, dest="auth_server_uri", required=True)
+    parser.add_argument("--auth_server_uri", "-asuri", action="store", type=str, dest="auth_server_uri")
     args = parser.parse_args()
     item_server_uri = args.item_server_uri
     auth_server_uri = args.auth_server_uri
 
-    # Construct the web tree
-    root = Resource()
-    root.putChild(b"login", LoginPage(auth_server_uri))
-    root.putChild(b"home", HomePage(auth_server_uri))
-    root.putChild(b"search", SearchPage(auth_server_uri, item_server_uri))
-    root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage(auth_server_uri))
+    # If the auth_server_uri is provided,
+    # then run the website with authentication.
+    if auth_server_uri:
+        root = get_web_tree_auth(item_server_uri, auth_server_uri)
+
+    else:
+        root = get_web_tree_no_auth(item_server_uri)
 
     # Serve the web tree
     factory = Site(root)
@@ -693,3 +701,5 @@ if __name__ == "__main__":
     endpoint = endpoints.TCP4ServerEndpoint(reactor, HTTP_PORT)
     endpoint.listen(factory)
     reactor.run()
+
+
