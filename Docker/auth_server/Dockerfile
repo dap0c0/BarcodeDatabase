@@ -45,12 +45,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,source=requirements.txt,target=requirements.txt \
     python -m pip install -r requirements.txt
 
+
+# Set the timezone
+RUN ln -fs /usr/share/zoneinfo/America/Chicago /etc/localtime && \
+    echo "America/Chicago" > /etc/timezone
+
 # Switch to the non-privileged user to run the application.
 USER appuser
 
-
 # Expose the port that the application listens on.
 EXPOSE 3191
-
-# Run the application.
-CMD python3 AuthServer.py

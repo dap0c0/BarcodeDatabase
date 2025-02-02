@@ -18,7 +18,7 @@ services:
     links:
       - "auth_server"
     command:
-      python3 FrontEndServer.py -isuri "mongodb+srv://cadizd:3NkC4rGgaKedufa0@cluster0.2ighc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+      python3 FrontEndServer.py -isuri "mongodb+srv://cadizd:3NkC4rGgaKedufa0@cluster0.2ighc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0" -asuri "https://auth_server:3191/test_auth/"
 
   auth_server:
     build:

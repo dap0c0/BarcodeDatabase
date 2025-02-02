@@ -38,6 +38,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,source=requirements.txt,target=requirements.txt \
     python -m pip install -r requirements.txt
 
+# Set timezone
+RUN ln -fs /usr/share/zoneinfo/America/Chicago /etc/localtime && \
+    echo "America/Chicago" > /etc/timezone
+
 # Switch to the non-privileged user to run the application.
 USER appuser
 
@@ -46,6 +50,3 @@ COPY . .
 
 # Expose the port that the application listens on.
 EXPOSE 80
-
-# Run the application.
-CMD python3 FrontEndServer.py -db page_data -col jan_14 -isuri "mongodb+srv://cadizd:3NkC4rGgaKedufa0@cluster0.2ighc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0" -asuri "https://auth_server:3191/test_auth/"
