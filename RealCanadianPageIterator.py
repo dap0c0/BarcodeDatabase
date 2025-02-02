@@ -1,5 +1,4 @@
 import asyncio
-import time
 import sys
 import os
 import json
@@ -9,16 +8,15 @@ from DataExtractor import DataExtractor
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 from MongoClient import MongoClientAsync, CollectionNotFound
+from playwright.async_api import async_playwright
+from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME, today
 import playwright._impl._errors
 
 class RealCanadianPageIterator(ABC):
-    GROCERY_NAME = "grocery"
-    HOME_BEAUTY_BABY_NAME = "home-beauty-baby"
-    JF_NAME = "joe-fresh"
     NO_GRID_MESSAGE = "No items are available."
     DEFAULT_FILE_PATH = "leaves/leaves.json"
     DEFAULT_INDENT = 4
-    DEFAULT_TIMEOUT_SELECTORS = 10000
+    DEFAULT_TIMEOUT_SELECTORS = 20000
     DEFAULT_TIMEOUT_NAVIGATION = 30000
 
     def __init__(self,
@@ -39,7 +37,7 @@ class RealCanadianPageIterator(ABC):
         assert isinstance(latitude_longitude, tuple)
         assert isinstance(permissions, list)
         assert isinstance(store_location, int)
-        self._playwright = playwright
+        self._playwright = None
         self._root_url = root_url
         self._browser_str = browser
         self._endpoint_uri = endpoint_uri
@@ -56,6 +54,7 @@ class RealCanadianPageIterator(ABC):
                jf: bool,
                workers: int):
         pass
+
 
 class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
     def __init__(self,
@@ -81,7 +80,9 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
                                         permissions,
                                         store_location)
         self._db_client = MongoClientAsync(endpoint_uri)
+        self._playwright = playwright
         self._leafs_filepath = leafs_filepath
+
 
     async def initialize(self):
         self._browser = await getattr(self._playwright, self._browser_str).launch(
@@ -358,13 +359,13 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # database (the department) and the collection (the current date).
         # For example, A Joe Fresh leaf iterated on Jan 25, 2025 will have documents
         # uploaded to joe-fresh/2025-01-5.
-        today = time.strftime("%Y-%m-%d")
+        todays_date = today()
         yesterday = self._yesterday()
 
         for department in leafs_dict:
             leafs = leafs_dict[department]
             f"Iterating {len(leafs)} leafs for {department}"
-            self._db_client.select_collection(database=department, collection=today)
+            self._db_client.select_collection(database=department, collection=todays_date)
             await self._db_client.create_index("_id")
             counter = 0
             
@@ -375,7 +376,11 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
                 await page.close()
                 counter += 1
 
-            await self._migrate_codes(department, yesterday, department, today)
+            try:
+                await self._migrate_codes(department, yesterday, department, todays_date)
+            
+            except CollectionNotFound as e:
+                pass
 
     async def _extract_all_leaves(self,
                                   workers: int,
@@ -422,21 +427,21 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         if grocery:
             alert("Extracting leaf(s) for Grocery...")
             grocery_leafs = ["https://www.realcanadiansuperstore.ca/en/food/c/27985"]
-            leafs_dict[self.GROCERY_NAME] = grocery_leafs
+            leafs_dict[GROCERY_NAME] = grocery_leafs
 
         if home_beauty_baby:
             alert("Extracting category urls for CHABA")
             hbb_urls = await self._get_urls_surface(hbb_ul_tag)
             alert(f"Extracting leaf(s) from CHABA...")
             hbb_leafs = await self._extract_leafs_department(hbb_urls, workers)
-            leafs_dict[self.HOME_BEAUTY_BABY_NAME] = hbb_leafs
+            leafs_dict[HOME_BEAUTY_BABY_NAME] = hbb_leafs
 
         if joe_fresh:
             alert("Extracting category urls for Joe Fresh")
             jf_urls = await self._get_urls_surface(jf_ul_tag)
             alert(f"Extracting leaf(s) for Joe Fresh...")
             jf_leafs = await self._extract_leafs_department(jf_urls, workers)
-            leafs_dict[self.JF_NAME] = jf_leafs
+            leafs_dict[JF_NAME] = jf_leafs
 
         return leafs_dict
 
@@ -655,10 +660,15 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # For any given page, extract all the products
         # and write to our database.
         async def extract_write(page):
-            products = await self._extract_product_dicts(page)
+            try:
+                products = await self._extract_product_dicts(page)
             
-            if len(products) != 0:
-                await self._write_to_db(products)
+                if len(products) != 0:
+                    await self._write_to_db(products)
+
+            # TODO: remove this and debug which pages get timeouterrors
+            except playwright._impl._errors.TimeoutError:
+                pass
 
         # Get coroutines to gather.
         # DEBUGGING CODE
