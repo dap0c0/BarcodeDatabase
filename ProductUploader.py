@@ -1,0 +1,126 @@
+from abc import ABC, abstractmethod
+from MongoClient import MongoClientAsync
+import asyncio
+import json
+import argparse
+
+class ProductUploader(ABC):
+    UPSERT = True
+    def __init__(self, isuri: str, database: str, collection: str, filename: str, debug: bool=False):
+        assert isinstance(filename, str)
+        assert isinstance(isuri, str)
+        self._filename = filename
+        self._database = database
+        self._collection = collection
+        self._debug = debug
+        self._client = MongoClientAsync(isuri)
+        self._client.select_collection(database, collection)
+
+    @abstractmethod
+    async def upload_changes(self, query_filter_name: str):
+        pass
+
+    @abstractmethod
+    async def get_products(self):
+        pass
+
+class JSONProductUploader(ProductUploader):
+    ''' Allow client to write changes to a file
+    and have those changes uploaded to the item server.'''
+
+    DEFAULT_QUERY_FILTER = "_id"
+    DEFAULT_OUTPUT_FILENAME = "products.json"
+    DEFAULT_INDENT = 4
+    def __init__(self, isuri: str, database: str, collection: str, debug: bool=False, filename: str=DEFAULT_OUTPUT_FILENAME,):
+        ProductUploader.__init__(self, isuri, database, collection, filename, debug)
+
+    async def upload_changes(self, query_filter_name: str=DEFAULT_QUERY_FILTER):
+        assert isinstance(query_filter_name, str)
+        assert query_filter_name != ""
+
+        with open(self._filename, "r") as rfile:
+            data_dict = json.load(rfile)
+            doc_pairs = []
+
+            for _, item in data_dict.items():
+                assert isinstance(item, dict), f"{item} is not a dict!"
+                query_filter = {query_filter_name: item[query_filter_name]}
+                data_to_push = item
+                doc_pairs.append((query_filter, data_to_push, self.UPSERT))
+
+            if self._debug:
+                print(f"Pushing {len(doc_pairs)} products to {self._database}.{self._collection}...")
+
+            await self._client.bulk_replace(doc_pairs)
+            print(f"Success!")
+
+    async def get_products(self):
+        product_json = {}
+        cursor = await self._client.find({})
+
+        async for item in cursor:
+            assert isinstance(item, dict)
+            product_json[item["_id"]] = item
+
+        if self._debug:
+            print(f"Got {len(product_json)} product(s)!")
+        
+        with open(self._filename, "w") as wfile:
+            json.dump(product_json, wfile, indent=self.DEFAULT_INDENT)
+
+            if self._debug:
+                print(f"Dumped json to {self._filename}")
+
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-isuri", "--item-server-uri", action="store", dest="item_server_uri", required=True, type=str)
+    parser.add_argument("-d", "--debug", action="store_false", dest="debug")
+    parser.add_argument("-f", "--file", action="store", dest="file")
+    parser.add_argument("-db", "--database", action="store", dest="database", required=True, type=str)
+    parser.add_argument("-col", "--collection", action="store", dest="collection", required=True, type=str)
+
+    # Upload changes
+    mxg_a = parser.add_argument_group()
+    mxg_a.add_argument("--upload", action="store_true", dest="upload")
+    mxg_a.add_argument("-qfn", "--query-filter-name", action="store", dest="query_filter_name", default=JSONProductUploader.DEFAULT_QUERY_FILTER)
+
+    # Get products
+    mxg_b = parser.add_argument_group()
+    mxg_b.add_argument("--get", action="store_true", dest="get")
+
+    # Parse args and verify that only one
+    # version of the program is desired (upload XOR get products).
+    args = parser.parse_args()
+    item_server_uri = args.item_server_uri
+    database = args.database
+    collection = args.collection
+    debug = args.debug
+    file = args.file
+    upload = args.upload
+    query_filter_name = args.query_filter_name
+    get = args.get
+
+    upload_chosen = upload or query_filter_name is not None
+    get_chosen = get
+
+    if upload_chosen and get_chosen:
+        raise parser.error("Cannot simulatenously get products and upload!")
+
+    elif not upload_chosen and not get_chosen:
+        raise parser.error("Upload or get must be provided!")
+
+    # All arguments provided are validated!
+    # Start program.
+    if file:
+        product_interface = JSONProductUploader(item_server_uri, database, collection, debug, file)
+
+    else:
+        product_interface = JSONProductUploader(item_server_uri, database, collection, debug)
+
+    if upload_chosen:
+        await product_interface.upload_changes(query_filter_name)
+
+    elif get_chosen:
+        await product_interface.get_products()
+
+asyncio.run(main())
