@@ -16,8 +16,9 @@ class RealCanadianPageIterator(ABC):
     NO_GRID_MESSAGE = "No items are available."
     DEFAULT_FILE_PATH = "leaves/leaves.json"
     DEFAULT_INDENT = 4
-    DEFAULT_TIMEOUT_SELECTORS = 20000
+    DEFAULT_TIMEOUT_SELECTORS = 30000
     DEFAULT_TIMEOUT_NAVIGATION = 30000
+    SITE_DOMAIN = "https://realcanadiansuperstore.ca"
 
     def __init__(self,
                 playwright,
@@ -54,7 +55,6 @@ class RealCanadianPageIterator(ABC):
                jf: bool,
                workers: int):
         pass
-
 
 class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
     def __init__(self,
@@ -112,7 +112,7 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
         return url
 
     # <------ Helper Functions ------>
-    async def _write_to_db(self,
+    async def _replace_in_db(self,
                            product_dicts: list):
         triplets = []
 
@@ -128,6 +128,24 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
             triplets.append(triplet)
 
         await self._db_client.bulk_replace(triplets)
+
+    async def _insert_in_db(self,
+                            product_dicts: list):
+        # Note that the data extracted from each page
+        # does not include barcode data! Include such information.
+        for product in product_dicts:
+            product["codes"] = {
+                "upc": "",
+                "ean": "",
+                "plu": ""
+                }
+            product["_id"] = product["product_id"]
+
+        try:
+            await self._db_client.insert_many(product_dicts, ordered=False)
+
+        except:
+            pass
 
     async def _has_product_grid(self, page) -> bool:
         await page.wait_for_load_state("domcontentloaded")
@@ -246,7 +264,7 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
             store_cookie = {
                 "name": "last_selected_store",
                 "value": f"{store_location}",
-                "url": "https://www.realcanadiansuperstore.ca", # TODO: fix hardcoded value
+                "url": self.SITE_DOMAIN, # TODO: fix hardcoded value
                 "httpOnly": False,
                 "secure": True,
                 "sameSite": "Lax"
@@ -310,6 +328,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         ''' For every product in db_src.col_src with
         any data (UPC, EAN, etc.), migrate those codes to the
         respective item in db_dest.col_dest.'''
+
         # Verify that the collections exist
         if not await self._db_client.check_exists_col(db_src, col_src):
             raise CollectionNotFound(f"{db_src}.{col_src} doesn't exist!")
@@ -379,8 +398,8 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             try:
                 await self._migrate_codes(department, yesterday, department, todays_date)
             
-            except CollectionNotFound as e:
-                pass
+            except CollectionNotFound:
+                sys.stderr.write(f"The collection was not found!")
 
     async def _extract_all_leaves(self,
                                   workers: int,
@@ -405,12 +424,16 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
 
         for child in soup.children:
             if child.button != None:
-                if str(child.button.span.string) == "Home, Beauty & Baby":
+                if str(child.button.span.string) == "Grocery":
+                    grocery_ul_tag = child.ul
+
+                elif str(child.button.span.string) == "Home, Beauty & Baby":
                     hbb_ul_tag = child.ul
 
                 elif str(child.button.span.string) == "Joe Fresh":
                     jf_ul_tag = child.ul
-        
+
+        assert grocery_ul_tag != None, "No Grocery ul tag was extracted." 
         assert hbb_ul_tag != None, "No CHABA ul tag was extracted."
         assert jf_ul_tag != None, "No Joe Fresh ul tag was extracted."
 
@@ -426,7 +449,9 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # actual Grocery, Meat, and Seafood.
         if grocery:
             alert("Extracting leaf(s) for Grocery...")
-            grocery_leafs = ["https://www.realcanadiansuperstore.ca/en/food/c/27985"]
+            grocery_urls = await self._get_url_surface(grocery_ul_tag)
+            alert(f"Extracting leaf(s) for Grocery...")
+            grocery_leafs = await self._extract_leafs_department(grocery_urls, workers)
             leafs_dict[GROCERY_NAME] = grocery_leafs
 
         if home_beauty_baby:
@@ -452,7 +477,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
 
         for li_tag in department_tag.contents:
             assert li_tag.name == "li"
-            links.append("https://realcanadiansuperstore.ca" + li_tag.a.get("href"))
+            links.append(self.SITE_DOMAIN + li_tag.a.get("href"))
 
         return links
 
@@ -662,13 +687,14 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         async def extract_write(page):
             try:
                 products = await self._extract_product_dicts(page)
-            
+        
                 if len(products) != 0:
-                    await self._write_to_db(products)
+                    # await self._replace_in_db(products)
+                    await self._insert_in_db(products)
 
             # TODO: remove this and debug which pages get timeouterrors
             except playwright._impl._errors.TimeoutError:
-                pass
+                sys.stderr.write(f"Error at {page.url}\n")
 
         # Get coroutines to gather.
         # DEBUGGING CODE
@@ -988,3 +1014,8 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         print("Writing POC...")
         await self._db_client.insert_one({"write": "success"})
         print("POC written!")
+
+    async def _test_code_migration(self):
+        print("Testing code migration!")
+        result = await self._migrate_codes("test_src", "col_src", "test_dest", "col_dest")
+        print(f"Result is {result}")
