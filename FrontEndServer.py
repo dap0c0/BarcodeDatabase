@@ -249,6 +249,7 @@ class HomePage(HTTPResource):
         request.write(f'''<!DOCTYPE html>
                         <html>
                             <head>
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
                                 <meta charset='utf-8'>
                                 <title>
                                 </title>
@@ -289,9 +290,280 @@ class SecureHomePage(HomePage, SecureResource):
         return NOT_DONE_YET
 
 class BarcodeBruteforcerPage(HTTPResource):
+    MOD_INVERSE_3_B10 = 7
+    UPC_LEN = 12
+    DEFAULT_MARKER = "x"
+
     def __init__(self):
         self._bc_generator = UPCBarcodeGenerator(50, add_checksum=False)
         self._pat_extractor = PatternExtractor()
+
+    def calculate_checksum(self,
+                           upc: str):
+        assert isinstance(upc, str)
+        assert len(upc) <= self.UPC_LEN
+        odd_total = 0
+        even_total = 0
+
+        for i, char in enumerate(upc):
+            if (i + 1) % 2 == 0 and (i + 1) != self.UPC_LEN:
+                even_total += int(char)
+
+            elif (i + 1) % 2 == 1:
+                odd_total += int(char)
+
+        c = 10 - (even_total + 3 * odd_total) % 10
+        c = c % 10
+        return c
+
+    def solve_digit(self,
+                    upc: str,
+                    digit_marker: str) -> list:
+        ''' Return all valid UPCs given a partial UPC
+        of either 1 or 2 missing digits.'''
+        assert isinstance(upc, str)
+        assert isinstance(digit_marker, str)
+        assert len(upc) == self.UPC_LEN
+        assert len(digit_marker) == 1
+        markers_found = 0
+
+        for char in upc:
+            if char == digit_marker:
+                markers_found += 1
+
+        assert markers_found > 0, "No markers found!"
+        assert markers_found <= 2, "There cannot be more than 2 markers!"
+
+        if markers_found == 1:
+            return self.solve_digit_one(upc, digit_marker)
+
+        else:
+            return self.solve_digit_two(upc, digit_marker)
+
+    def solve_digit_two(self,
+                        upc: str,
+                        digit_marker: str) -> list:
+        ''' Calculate the two missing digits and return
+        the list of all valid UPCs.'''
+        assert isinstance(upc, str)
+        assert len(upc) == self.UPC_LEN
+        assert isinstance(digit_marker, str)
+        
+        # Allow only two markers to be present
+        # to denote the missing digits.
+        marker_indices = []
+
+        # Observe that the checksum digit is derived as follows:
+        # 10 - [(3 * O) + E] mod 10 = CHECKSUM
+        odd_total = 0
+        even_total = 0
+
+        # Offset the indices by one.
+        # Don't read from 0. Start from 1
+        for i, char in enumerate(upc):
+            try:
+                digit = int(char)
+
+            except ValueError:
+                if char == digit_marker:
+                    assert len(marker_indices) != 2
+
+                marker_indices.append(i + 1)
+
+            else:
+                # Remember to not count the checksum digit in our total
+                # of evens!
+                if (i + 1) != len(upc) and (i + 1) % 2 == 0:
+                    even_total += digit
+
+                elif (i + 1) % 2 == 1:
+                    odd_total += digit
+
+        # Ensure that two missing digits were marked
+        assert len(marker_indices) == 2, "Two missing digits must be marked!"
+
+        # All checks have passed!
+        # Check the indices of the marked digits.
+        # From now on, E will refer to an even index chosen,
+        # whereas O will refer to an odd index chosen,
+        # and C will refer to the checksum index being chosen.
+        valid_upcs = []
+        x_i = marker_indices[0]
+        y_i = marker_indices[1]
+        check = lambda i: i == len(upc)
+        odd = lambda i: i % 2 == 1
+        even = lambda i: i % 2 == 0
+
+        # Case 1: {O, C}
+        # 10 - (E + 3O + 3x) mod 10 = C
+        if (odd(x_i) and check(y_i)):
+            for i in range(10):
+                x = i
+                c = 10 - (even_total + 3 * odd_total + 3 * i) % 10
+                c = c % 10
+                valid_upc = upc[:x_i - 1] + str(x) + upc[x_i: -1] + str(c)
+                valid_upcs.append(valid_upc)
+
+        # Case 2: {E, C}
+        # 10 - (E + x + 3O) mod 10 = C
+        elif (even(x_i) and check(y_i)):
+            for i in range(10):
+                x = i
+                c = 10 - (even_total + i + 3 * odd_total) % 10
+                c = c % 10
+                valid_upc = upc[:x_i - 1] + str(x) + upc[x_i: -1] + str(c)
+                valid_upcs.append(valid_upc)
+
+        # Case 3: {E, E}
+        # 10 - C - (E + 3O) mod 10 = (x + y) mod 10
+        # Or: (x, y) = (i, ((10 - C - (E + 3O) mod 10) - i) mod 10)
+        # for i in [0, 9].
+        elif (even(x_i) and even(y_i)):
+            c = int(upc[11])
+
+            for i in range(10):
+                x = i
+                y = ((10 - c - (even_total + 3 * odd_total) % 10 - i)) % 10
+                left_x_i = upc[:x_i - 1]
+                between_x_y = upc[x_i: y_i - 1]
+                right_y_i = upc[y_i:]
+                valid_upc = left_x_i + str(x) + between_x_y + str(y) + right_y_i
+                valid_upcs.append(valid_upc)
+        
+        # Case 4: {O, E}
+        # 10 - C - (E + 3O) mod 10 = (x + 3y) mod 10
+        # Or, (x, y) = (i, (10 - C - (E + 3O) mod 10 - 3i) mod 10)
+        # for i in [0, 9]
+        elif (odd(x_i) and even(y_i)):
+            c = int(upc[11])
+
+            for i in range(10):
+                x = i
+                y = 10 - c - (even_total + 3 * odd_total) % 10 - 3 * i
+                y = y % 10
+
+                left_x_i = upc[:x_i - 1]
+                between_x_y = upc[x_i: y_i - 1]
+                right_y_i = upc[y_i:]
+                valid_upc = left_x_i + str(x) + between_x_y + str(y) + right_y_i
+                valid_upcs.append(valid_upc)
+
+        # Case 5: {E, O}
+        # 10 - C - (E + 3O) mod 10 = (x + 3y) mod 10
+        # Or, (x, y) = ((10 - C - (E + 3O) mod 10 - 3i) mod 10), i)
+        # for i in [0, 9]
+        elif (even(x_i) and odd(y_i)):
+            c = int(upc[11])
+
+            for i in range(10):
+                y = i
+                x = 10 - c - (even_total + 3 * odd_total) % 10 - 3 * i
+                x = x % 10
+
+                left_x_i = upc[:x_i - 1]
+                between_x_y = upc[x_i: y_i - 1]
+                right_y_i = upc[y_i:]
+                valid_upc = left_x_i + str(x) + between_x_y + str(y) + right_y_i
+                valid_upcs.append(valid_upc)
+
+
+
+        # Case 5: {O, O}
+        # 10 - C - (E + 3O) = 3(x + y) mod 10
+        # -> 3^-1 = 7
+        # -> (x + y) mod 10 = 7(10 - C - (E + 3O)) mod 10
+        # Hence, (x, y) = (i, (7(10 - C - (E + 3O) mod 10 - i) mod 10)
+        elif (odd(x_i) and odd(y_i)):
+            c = int(upc[11])
+
+            for i in range(10):
+                x = i
+                y = self.MOD_INVERSE_3_B10 * (10 - c - (even_total + 3 * odd_total) % 10) - i
+                y = y % 10
+                left_x_i = upc[:x_i - 1]
+                between_x_y = upc[x_i: y_i - 1]
+                right_y_i = upc[y_i:]
+                valid_upc = left_x_i + str(x) + between_x_y + str(y) + right_y_i
+                valid_upcs.append(valid_upc)
+
+        assert len(valid_upcs) == 10, breakpoint()
+        return valid_upcs
+
+    def solve_digit_one(self,
+                        upc: str,
+                    digit_marker: str) -> list:
+        ''' Derive the missing digit in a UPC (12 digit) code.'''
+        assert isinstance(upc, str)
+        assert len(upc) == self.UPC_LEN, "The barcode must be 12 digits long!"
+        assert isinstance(digit_marker, str)
+
+        # Allow only one marker to be present
+        # to denote the missing digit.
+        marker_index = None
+
+        # Observe that the checksum digit is derived as follows:
+        # 10 - [(3 * O) + E] mod 10 = CHECKSUM
+        odd_total = 0
+        even_total = 0
+        
+        # Offset the indices by one.
+        # Don't read from 0. Start from 1.
+        for i, char in enumerate(upc):
+            try:
+                digit = int(char)
+
+            except ValueError:
+                if char == digit_marker:
+                    assert not marker_index, "There are more than 1 markers!"
+
+                marker_index = i + 1
+
+            else:
+                # Remember to not count the checksum digit in our
+                # total of evens!
+                if (i + 1) != len(upc) and (i + 1) % 2 == 0:
+                    even_total += digit
+
+                elif (i + 1) % 2 == 1:
+                    odd_total += digit
+
+        # Ensure that a missing digit was marked
+        assert marker_index, "No missing digit was marked!"
+
+        # All checks have passed.
+        # Case 1: the missing digit is the checksum digit!
+        # Proceed with the forward calculation from the formula
+        # established above. mod 10 is reapplied twice to account
+        # for the possibility of 3 * odd_total + even_total already being
+        # a multiple of 10, hence preventing a nonsense result of 10 - 0 = 10.
+        if marker_index == len(upc):
+            c = (10 - (3 * odd_total + even_total) % 10) % 10
+            return [upc[:-1] + str(c)]
+
+        # Case 2:
+        # Suppose that the digit is on an odd index. The formula is:
+        # 10 - [(E + 3 * O) + 3x] mod 10 = CHECKSUM
+        # => [(E + 3 * O) + 3x] mod 10 = 10 - CHECKSUM
+        # Try to derive the least value of x such that
+        # the equation is true.
+        checksum_digit = int(upc[11])
+
+        if marker_index % 2 == 1:
+            for x in range(10):
+                if (((3 * odd_total + even_total) % 10) + (3 * x)) % 10 == 10 - checksum_digit:
+                    return [upc[:marker_index - 1] + str(x) + upc[marker_index:]]
+
+        # Suppose that the digit is on an even index.
+        # We proceed very similarly:
+        # 10 - [(E + 3 * O) + x] mod 10 = CHECKSUM
+        # => [(E + 3 * O) + x] mod 10 = 10 - CHECKSUM
+        # Again, try to derive the least value of x such
+        # that the equation is true.
+        else:
+            for x in range(10):
+                if (((3 * odd_total + even_total) % 10) + x) % 10 == 10 - checksum_digit:
+                    return [upc[:marker_index-1] + str(x) + upc[marker_index:]]
+
 
     # Display the page to the user!
     def render_page(self, _, request):
@@ -302,47 +574,45 @@ class BarcodeBruteforcerPage(HTTPResource):
     # Display all possible barcodes on the page.
     # E.g, for 012345x23450, display the barcodes of
     # 012345023450, 012345123450, ...
-    def render_barcodes(self, upc_barcode: str, request):
+    def render_barcodes_new(self, upc_barcode: str, request):
         if upc_barcode != None:
-
-            def find_char(string: str, charset: list):
-                i = 0
-                
-                for c in upc_barcode:
-                    if c in charset:
-                        return i
-
-                    i += 1
-                return None
-
-            # Locate index of x
-            x_index = find_char(upc_barcode, ["x", "X"])
+            upcs = self.solve_digit(upc_barcode, self.DEFAULT_MARKER)
 
             # Write all barcodes into streams
             streams = []
 
-            for i in range(10):
+            for upc in upcs:
                 stream = io.BytesIO()
-                curr_barcode = upc_barcode[:x_index] + str(i) + upc_barcode[x_index + 1:]
-                self._bc_generator.write(curr_barcode, stream)
+                self._bc_generator.write(upc, stream)
                 streams.append(stream)
 
             # Render them all onto the page
-            to_render = f'''<!DOCTYPE HTML>
-                            <html>
-                                <head>
-                                    <meta charset='utf-8'>
-                                    <title>
-                                    </title>
-                                </head>
-                                <body>'''
-            
-            for stream in streams:
-                to_render += str(stream.getvalue(), "utf-8")
-                stream.close()
+            to_render = """<!DOCTYPE HTML>
+            <html>
+                <head>
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <meta charset='utf-8'>
+                    <title>Barcodes</title>
+                    <style>
+                        body {
+                            display: flex;
+                            flex-direction: column; /* Arrange items vertically */
+                            align-items: center; /* Center align the barcodes */
+                            gap: 20px; /* Add spacing between barcodes */
+                            font-family: Arial, sans-serif;
+                        }
+                    </style>
+                </head>
+                <body>
+            """
 
-            to_render += '''<body>
-                        </html>'''
+            for stream in streams:
+                to_render += f"<div>{str(stream.getvalue(), 'utf-8')}</div>"
+
+            to_render += """
+                </body>
+            </html>
+            """
             request.write(to_render.encode("utf-8"))
             request.finish()
 
@@ -369,6 +639,7 @@ class BarcodeBruteforcerPage(HTTPResource):
         to_render = f'''<!DOCTYPE HTML>
                         <html>
                             <head>
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
                                 <meta charset='utf-8'>
                                 <title>
                                     Search
@@ -402,7 +673,7 @@ class BarcodeBruteforcerPage(HTTPResource):
 
         d = Deferred()
         d.addCallback(self.check_input, request=request)
-        d.addCallbacks(self.render_barcodes, self.render_page,
+        d.addCallbacks(self.render_barcodes_new, self.render_page,
                     callbackKeywords={"request": request}, errbackKeywords={"request": request})
         d.callback(None)
         return NOT_DONE_YET
@@ -481,6 +752,7 @@ class SearchPage(HTTPResource):
             to_render = f'''<!DOCTYPE HTML>
                             <html>
                                 <head>
+                                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
                                     <meta charset='utf-8'>
                                     <title>
                                         Search
