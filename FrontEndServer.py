@@ -41,6 +41,11 @@ class Cookie(object):
 registerAdapter(Cookie, Session, ICookie)
 
 class HTTPResource(Resource, ABC):
+    def _generate_link(self, link_text: str, redirect: str):
+        assert isinstance(link_text, str)
+        assert isinstance(redirect, str)
+        return f'''<a href="{redirect}">{link_text}</a>'''
+
     def _promise_http(self,
                       url: str,
                       cookies_dict: dict=None,
@@ -264,11 +269,6 @@ class HomePage(HTTPResource):
                             </body>
                         </html>'''.encode("utf-8"))
         request.finish()
-
-    def _generate_link(self, link_text: str, redirect: str):
-        assert isinstance(link_text, str)
-        assert isinstance(redirect, str)
-        return f'''<a href="{redirect}">{link_text}</a>'''
 
     def render_GET(self, request):
         '''Allow user to navigate between search and data addition.'''
@@ -680,7 +680,7 @@ class BarcodeBruteforcerPage(HTTPResource):
 
 class SecureBarcodeBruteforcerPage(BarcodeBruteforcerPage, SecureResource):
     def __init__(self, auth_server_url: str):
-        BarcodeBruteforcerPage.__init__(self)
+        BarcodeBruteforcerPage.__init__(selff)
         SecureResource.__init__(self, auth_server_url)
 
     def render_GET(self, request: Request):
@@ -712,6 +712,7 @@ class SearchPage(HTTPResource):
                  api_url: str):
         self._api_url = api_url
         self._db_client = MongoClientSync(api_url)
+        self._bc_generator = UPCBarcodeGenerator(50, add_checksum=False)
 
     def render_GET(self,
                    request):
@@ -720,8 +721,8 @@ class SearchPage(HTTPResource):
         d.addCallback(self.check_query, request=request)
         d.addCallbacks(self.search_database, self.render_page,
                     callbackKeywords={"request": request}, errbackKeywords={"request": request})
-        d.addCallback(self.display_json, request=request)
-
+        # d.addCallback(self.display_json, request=request)
+        d.addCallback(self.display_nonjson, request=request)
         # Fire off chain of events
         d.callback(None)
         return NOT_DONE_YET
@@ -818,6 +819,46 @@ class SearchPage(HTTPResource):
         request.write(b"<pre>" + bytes(json.dumps(data, indent=4), "utf-8") + b"</pre>")
         request.finish()
 
+    def display_nonjson(self,
+                        matches: dict,
+                        request):
+        assert isinstance(matches, dict)
+        for _, product in matches.items():
+            title = product["product_title"]
+            brand = "(brand n/a)" if product["product_brand"] == "" else product["product_brand"]
+            link = product["product_url"]
+            id = product["product_id"]
+            pps = product["product_package_size"]
+            product_listing = [self._generate_link(title, f"https://realcanadiansuperstore.ca{link}"), brand, id, pps]
+            
+            for datum in product_listing:
+                if datum == "":
+                    product_listing.remove(datum)
+            product_listing_str = "\n".join(product_listing) + "\n"
+
+            # Price info (nested)
+            for key, price in product["prices"].items():
+                if price != "":
+                    product_listing_str += f"{key}: {price}\n".replace("_", " ")
+
+            # Code info (nested)
+            for key, code in product["codes"].items():
+                if code != "":
+                    product_listing_str += f"{key}: {code}\n"
+                    
+                    if key.strip() == "upc":
+                        stream = io.BytesIO()
+                        try:
+                            self._bc_generator.write(code, stream)
+                            product_listing_str += f"<div>{str(stream.getvalue(), 'utf-8')}</div>"
+                            
+                        except Exception as e:
+                            print(e)
+                            pass
+
+            # Write all data to the page
+            request.write(b"<pre>" + bytes(product_listing_str, "utf-8") + b"</pre>")
+        request.finish()
         # <------- Helper Functions ------>
     def _check_valid_regex(self, regex):
         ''' Check whether the regex string
@@ -928,7 +969,8 @@ class SecureSearchPage(SearchPage, SecureResource):
                        callbackKeywords={"request": request}, errbackKeywords={"request": request})
         d.addCallbacks(self.search_database, self.render_page,
                        callbackKeywords={"request": request}, errbackKeywords={"request": request})
-        d.addCallback(self.display_json, request=request)
+        # d.addCallback(self.display_json, request=request)
+        d.addCallback(self.display_nonjson, request=request)
         return NOT_DONE_YET
 
 # -------- MAIN PROGRAM -------- #
