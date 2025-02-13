@@ -15,6 +15,7 @@ from twisted.python.failure import Failure
 from twisted.internet import reactor, endpoints, ssl
 from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME, today
 from assets import fonts, colours
+from pymongo.errors import OperationFailure
 import argparse
 import urllib.parse
 import html
@@ -753,6 +754,23 @@ class SearchPage(HTTPResource):
                  api_url: str):
         self._api_url = api_url
         self._db_client = MongoClientSync(api_url)
+
+        # Initialize the indexes on all
+        # department databases to allow for
+        # text search.
+        valid_databases = [
+            GROCERY_NAME,
+            HOME_BEAUTY_BABY_NAME,
+            JF_NAME
+        ]
+        for db in valid_databases:
+            try:
+                self._db_client.select_collection(db, today())
+                self._db_client.create_text_index("$**")
+
+            except OperationFailure:
+                pass
+
         self._bc_generator = UPCBarcodeGenerator(50, add_checksum=False)
 
     def render_GET(self,
@@ -762,7 +780,6 @@ class SearchPage(HTTPResource):
         d.addCallback(self.check_query, request=request)
         d.addCallbacks(self.search_database, self.render_page,
                     callbackKeywords={"request": request}, errbackKeywords={"request": request})
-        # d.addCallback(self.display_json, request=request)
         d.addCallback(self.display_nonjson, request=request)
         # Fire off chain of events
         d.callback(None)
@@ -846,10 +863,12 @@ class SearchPage(HTTPResource):
             cookies[SESSION_ID_KEY] = session_cookie
 
             # Get all matches for the query.
-            cursor = self._db_client.find({})
-            items = [item for item in cursor]
-            query_matches = {item["_id"]: item for item in self._get_matches(search_query, items)}
-
+            # Sort them by text relevance.
+            tokens = search_query.strip().split(" ")
+            phrases_str= " ".join([f"\"{t}\"" for t in tokens])
+            query = {"$text": {"$search": f'"{phrases_str}"'}}
+            cursor = self._db_client.find(query).sort("score", {"$meta": "textScore"})
+            query_matches = {item["_id"]: item for item in cursor}
         return query_matches
 
     # Pretty print all data for the client on the page.

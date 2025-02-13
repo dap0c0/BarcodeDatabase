@@ -79,13 +79,14 @@ class MongoClientAsync(MongoClient):
         return await self._collection.insert_one(document)
 
     async def insert_many(self,
-                          documents: list):
+                          documents: list,
+                          ordered: bool=True):
         assert isinstance(documents, list)
         
         for document in documents:
-            assert isinstance(document, list)
+            assert isinstance(document, dict)
 
-        return await self._collection.insert_many(documents)
+        return await self._collection.insert_many(documents, ordered)
 
     # Replacement
     async def replace_one(self,
@@ -223,6 +224,14 @@ class MongoClientSync(MongoClient):
         assert isinstance(key, str)
         self._verify_collection()
         return self._collection.create_index(key)
+
+    def create_text_index(self,
+                          *fields):
+        if fields:
+            self._collection.create_index(
+                [(f, "text") for f in fields],
+                default_language="english"
+            )
 
     # Finding
     def find(self,
