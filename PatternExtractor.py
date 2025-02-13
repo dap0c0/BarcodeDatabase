@@ -10,7 +10,8 @@ class PatternExtractor():
     def get_matches(self, string):
         ''' Return a list of matches within the string.'''
         matched_groups = self.pattern.findall(string)
-        return matched_groups
+        # Filter out all empty strings.
+        return [m for m in matched_groups if m]
 
     def set_pattern(self, pattern_str):
         ''' Set pattern.'''
