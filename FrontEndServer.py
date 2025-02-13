@@ -14,7 +14,7 @@ from twisted.internet.defer import Deferred
 from twisted.python.failure import Failure
 from twisted.internet import reactor, endpoints, ssl
 from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME, today
-from functools import partial
+from assets import fonts, colours
 import argparse
 import urllib.parse
 import html
@@ -620,16 +620,57 @@ class BarcodeBruteforcerPage(HTTPResource):
     # The barcode must be 12 digits total
     # (including the x).
     def check_input(self, _, request):
+        def style_msg(msg: str,
+                      colour: str,
+                      font_family: str,
+                      font_size: int):
+            return f'''<pre style="color: {colour}; font-family: {font_family}; font-size: {font_size}px;">{msg}</pre>'''
+
+        error_size = 13
         upc_barcode = request.args[b"upc_barcode"][0].decode("utf-8")
         
         # Check length of the input
-        assert len(upc_barcode) == 12
+        assert len(upc_barcode) == 12, \
+        request.write(bytes(style_msg("The input must be 12 characters.", \
+                                        colours.red, \
+                                        fonts.menlo, \
+                                        error_size), "utf-8"))
+
+        # Check how many digits are marked
+        one_x_pat = r"\b(?:" + \
+            r"|(?:[^xX]*[xX][^xX]*)" + \
+            r")\b"
+
+        two_x_pat = r"\b(?:" + \
+            r"|(?:[^xX]*[xX][^xX]*[xX][^xX]*)" + \
+            r")\b"
+
+        self._pat_extractor.set_pattern(one_x_pat)
+        matches_one = self._pat_extractor.get_matches(upc_barcode)
+        self._pat_extractor.set_pattern(two_x_pat)
+        matches_two = self._pat_extractor.get_matches(upc_barcode)
+
+        assert len(matches_one) != 0 or len(matches_two) != 0, \
+        request.write(bytes(style_msg("Only one or two missing digits\nmust be marked with the character 'x'",
+                                      colours.red,
+                                      fonts.menlo,
+                                      error_size), "utf-8"))
 
         # Verify the input charset
-        valid_pattern = r"(?:\d*[xX]*\d*)"
+        valid_pattern = r"\b(?:" + \
+            r"|(?:\d*[xX]\d+)" + \
+            r"|(?:\d+[xX]\d*)" + \
+            r"|(?:\d*[xX]\d*[xX]\d+)" + \
+            r"|(?:\d+[xX]\d*[xX]\d*)" + \
+            r"|(?:\d*[xX]\d+[xX]\d*)" + \
+            r")\b"
+
         self._pat_extractor.set_pattern(valid_pattern)
         print(f"Matches: {self._pat_extractor.get_matches(upc_barcode)}")
-        assert len(self._pat_extractor.get_matches(upc_barcode)) != 0
+        assert len(self._pat_extractor.get_matches(upc_barcode)) != 0, request.write(bytes(style_msg("Input pattern was invalid.", \
+                                                                                                     colours.red, \
+                                                                                                     fonts.menlo, \
+                                                                                                     error_size), "utf-8"))
 
         # All checks passed! Bubble upc_barcode
         # for further processing
