@@ -4,4 +4,3 @@ class fonts:
 
 class colours:
     red = "red"
-    black = "black"
