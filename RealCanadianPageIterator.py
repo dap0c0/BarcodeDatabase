@@ -18,7 +18,7 @@ class RealCanadianPageIterator(ABC):
     DEFAULT_INDENT = 4
     DEFAULT_TIMEOUT_SELECTORS = 30000
     DEFAULT_TIMEOUT_NAVIGATION = 30000
-    SITE_DOMAIN = "https://realcanadiansuperstore.ca"
+    SITE_DOMAIN = "https://www.realcanadiansuperstore.ca"
 
     def __init__(self,
                 playwright,
@@ -154,7 +154,7 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
         async def positive():
             try:
                 await page.wait_for_load_state("domcontentloaded")
-                await page.query_selector('div[data-testid="product-grid"]')
+                await page.query_selector('div.css-1tjthuk[data-testid="product-grid-component"]')
                 await result_queue.put(True)
 
             except playwright._impl._errors.TimeoutError:
@@ -163,8 +163,8 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
         async def negative():
             try:
                 await page.wait_for_load_state("domcontentloaded")
-                await page.query_selector("p.css-1na1tkp")
-                text = await page.inner_text("p.css-1na1tkp")
+                await page.query_selector('p.css-1na1tkp[data-testid="sub-heading"]')
+                text = await page.inner_text('p.css-1na1tkp[data-testid="sub-heading"]')
 
                 if text == self.NO_GRID_MESSAGE:
                     await result_queue.put(False)
@@ -190,7 +190,7 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
 
         # Wait for the product grid to be available.
         if await self._has_product_grid(page):
-            await page.wait_for_selector('div[data-testid="product-grid"]')
+            await page.wait_for_selector('div[data-testid="product-grid-component"]')
             html = await page.inner_html("div.css-1tjthuk")
             grid_soup = BeautifulSoup(html, "html.parser")
             
@@ -261,15 +261,22 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
 
         # Set the store if needed
         if store_location:
-            store_cookie = {
+            last_selected_cookie = {
                 "name": "last_selected_store",
                 "value": f"{store_location}",
-                "url": self.SITE_DOMAIN, # TODO: fix hardcoded value
+                "url": self.SITE_DOMAIN,
                 "httpOnly": False,
                 "secure": True,
                 "sameSite": "Lax"
             }
-            await context.add_cookies([store_cookie])
+        
+            auto_store_cookie = {
+                "name": "auto_store_selected",
+                "value": f"{store_location}",
+                "url": self.SITE_DOMAIN,
+                "secure": True,
+            }
+            await context.add_cookies([auto_store_cookie, last_selected_cookie])
 
         return context
 
@@ -375,7 +382,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         from yesterday to today.'''
         # Start extracting products from every product
         # page (leaf), per department. Write each product to the respective
-        # database (the department) and the collection (the current date).
+        # database (the department) and the collection (thecurrent date).
         # For example, A Joe Fresh leaf iterated on Jan 25, 2025 will have documents
         # uploaded to joe-fresh/2025-01-5.
         todays_date = today()
@@ -449,7 +456,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # actual Grocery, Meat, and Seafood.
         if grocery:
             alert("Extracting leaf(s) for Grocery...")
-            grocery_urls = await self._get_url_surface(grocery_ul_tag)
+            grocery_urls = await self._get_urls_surface(grocery_ul_tag)
             alert(f"Extracting leaf(s) for Grocery...")
             grocery_leafs = await self._extract_leafs_department(grocery_urls, workers)
             leafs_dict[GROCERY_NAME] = grocery_leafs
@@ -513,9 +520,15 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
     async def _extract_leafs(self, page) -> list:
         assert page != None
 
-        # Base case: the current page is a leaf
+        # Base case: the current page is a leaf.
+        # We avoid adding empty leafs to leaves.json to avoid
+        # redundant checks during future crawls.
         if await self._is_leaf(page):
-            return [page.url]
+            if await self._has_product_grid(page):
+                return [page.url]
+
+            else:
+                return []
         
         try:
             # Observe the side accordion list of the page, like in
@@ -534,7 +547,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             return []
         
         for div in accordion_soup.children:
-            assert div.get("class")[0] == "css-srrvm8", breakpoint()
+            assert div.get("class")[0] == "css-srrvm8"
             pulled_list = div.find("ul", class_="css-pc4dq5")
             see_all_tag = pulled_list.contents[0]
             assert see_all_tag.string == "See All"
@@ -557,7 +570,8 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         return leafs
  
     async def _is_leaf(self, page) -> bool:
-        # If the page contains this element, it must be a leaf:
+        # If the page contains this element (a thin divider bar on
+        # the leaf of the page), it must be a leaf:
         # <hr aria-orientation="horizontal" class="chakra-divider css-1ap8ayt">
         await page.wait_for_load_state("domcontentloaded")
         result_queue = asyncio.Queue()
@@ -688,13 +702,15 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             try:
                 products = await self._extract_product_dicts(page)
         
+            # TODO: remove this and debug which pages get timeouterrors
+            except playwright._impl._errors.TimeoutError as e:
+                sys.stderr.write(f"Error at {page.url}\n")
+                print(e)
+
+            else:
                 if len(products) != 0:
                     # await self._replace_in_db(products)
                     await self._insert_in_db(products)
-
-            # TODO: remove this and debug which pages get timeouterrors
-            except playwright._impl._errors.TimeoutError:
-                sys.stderr.write(f"Error at {page.url}\n")
 
         # Get coroutines to gather.
         # DEBUGGING CODE
@@ -779,6 +795,9 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
 
         tasks = [test_driver(url) for url in urls]
         await asyncio.gather(*tasks)
+
+    async def _test_emptiness(self):
+        pass
 
     async def _test_leafs(self):
         page = await self._open_page(self._context, None, "https://www.google.com/")
@@ -911,7 +930,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         await joe_fresh()
         await grocery()
         await no_items()
-                    
+
     async def _test_extract_leafs(self):
         async def no_click():
             async def international():
