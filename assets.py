@@ -1,5 +1,5 @@
 class fonts:
-    menlo = "menlo"
+    menlo = "Menlo"
     
 class colours:
     red = "red",
