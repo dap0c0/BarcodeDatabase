@@ -1,0 +1,7 @@
+twisted==24.11.0
+pyopenssl==24.3.0
+service_identity==24.2.0
+pymongo==4.10.1
+pytest-playwright==0.6.2
+playwright==1.49.1
+beautifulsoup4==4.12.3

@@ -67,4 +67,27 @@ if __name__ == "__main__":
             await pi.initialize()
             await pi.scrape(grocery, home_beauty_baby, joe_fresh, workers)
 
+    async def run_test():
+        async with async_playwright() as p:
+            try:
+                pi = RealCanadianPageIteratorAsyncDiv(playwright=p,
+                                                browser="chromium",
+                                                endpoint_uri=isuri,
+                                                root_url=seed,
+                                                headless=True,
+                                                slow_mo=0,
+                                                latitude_longitude=(49.8938887, -97.1886292),
+                                                permissions=["geolocation"],
+                                                store_location=1511)
+                sys.stdout.write(f"Connection to {isuri} is valid!")
+                
+            except ServerSelectionTimeoutError:
+                sys.stderr.write(f"Failed to connect to {isuri}\n")
+                sys.exit()
+
+            await pi.initialize()
+            # await pi._test_code_migration()
+
+
     asyncio.run(run_async())
+    # asyncio.run(run_test())

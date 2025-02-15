@@ -100,7 +100,7 @@ async def main():
     query_filter_name = args.query_filter_name
     get = args.get
 
-    upload_chosen = upload or query_filter_name is not None
+    upload_chosen = upload
     get_chosen = get
 
     if upload_chosen and get_chosen:

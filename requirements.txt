@@ -1,0 +1,7 @@
+twisted==24.11.0
+pymongo==4.10.1
+python-barcode==0.15.1
+pyscrypt==1.6.2
+pyopenssl==24.3.0
+service_identity==24.2.0
+

@@ -63,4 +63,5 @@ class SimpleHTTPFactory(ClientFactory):
     def http_failed(self, url: str, reason):
         if self.deferred:
             d, self.deferred = self.deferred, None
+            breakpoint()
             d.errback((url, reason))

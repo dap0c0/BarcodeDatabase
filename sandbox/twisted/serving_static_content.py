@@ -11,7 +11,7 @@ from twisted.internet import reactor
 from twisted.internet import endpoints
 
 # Point resource to serve from
-resource = File("./../..")
+resource = File("./../../user-pass/")
 
 # Asynchronously create protocols for service
 # on httpchannels upon connectoin to the endpoint.
