@@ -8,5 +8,6 @@ item_server_url.txt
 cf_tunnel_token.txt
 user-pass
 products.json
+invalid_links.txt
 .DS_STORE
 
