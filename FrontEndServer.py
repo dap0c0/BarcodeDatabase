@@ -186,6 +186,53 @@ class SecureResource(HTTPResource, ABC):
         temp = f"{username}:{password}"
         return base64.b64encode(bytes(temp, "utf-8")).decode("utf-8")
 
+
+class RealProduct():
+    # 1 kg = 2.20462262 lbs
+    KG_TO_LBS_RATIO = 2.20462262
+
+    def __init__(self,
+                    weight: float,
+                    w_in_kg: bool,
+                    plu: int,
+                    price_rate: float,
+                    pr_in_kg: bool):
+        assert isinstance(weight, float)
+        assert isinstance(w_in_kg, bool)
+        assert isinstance(plu, int)
+        assert isinstance(price_rate, float)
+        assert isinstance(pr_in_kg, bool)
+        self.weight = weight
+        self.w_in_kg = w_in_kg
+        self.plu = plu
+        self.price_rate = price_rate
+        self.pr_in_kg = pr_in_kg
+        self.total_price = None
+        self._calculate_total_price()
+
+    def _calculate_total_price(self):
+        if self.w_in_kg:
+            # Weight: kg, Rate: $/kg
+            if self.pr_in_kg:
+                self.total_price = self.weight * self.price_rate
+
+            # Weight: kg, Rate: $/lb
+            # Convert kgs => lbs
+            else:
+                self.total_price = self.weight * RealProduct.KG_TO_LBS_RATIO * self.price_rate
+
+        else:
+            # Weight: lb, rate: $/kg
+            # Convert lbs => kgs
+            if self.pr_in_kg:
+                self.total_price = (self.weight / RealProduct.KG_TO_LBS_RATIO) * self.price_rate
+
+            # Weight: lb, rate: $/lb
+            else:
+                self.total_price = self.weight * self.price_rate
+
+        assert self.total_price > 0
+
 class LoginPage(SecureResource):
     def _generate_login_forms(self):
         ''' Generate html for login page.
@@ -266,6 +313,9 @@ class HomePage(HTTPResource):
                                 </div>
                                 <div>
                                     {self._generate_link("Barcode Bruteforcer", "/barcode_bruteforcer")}
+                                </div>
+                                <div>
+                                    {self._generate_link("PLU Barcode Generator", "/plu_barcode_generator")}
                                 </div>
                             </body>
                         </html>'''.encode("utf-8"))
@@ -487,7 +537,7 @@ class BarcodeBruteforcerPage(HTTPResource):
                 valid_upc = left_x_i + str(x) + between_x_y + str(y) + right_y_i
                 valid_upcs.append(valid_upc)
 
-        assert len(valid_upcs) == 10, breakpoint()
+        assert len(valid_upcs) == 10
         return valid_upcs
 
     def solve_digit_one(self,
@@ -720,9 +770,206 @@ class BarcodeBruteforcerPage(HTTPResource):
         d.callback(None)
         return NOT_DONE_YET
 
+class PLUBarcodeGeneratorPage(HTTPResource):
+    PLU_MAX_LEN = 6
+    PRICE_TOTAL_MAX_LEN = 5 # max number price digits in plu barcode
+    MAX_UPC_BARCODE_LEN = 11 # Not 12, because we don't need the checksum.
+
+    def __init__(self):
+        self._bc_generator = UPCBarcodeGenerator(50, add_checksum=False)
+
+    def _generate_html(self):
+        ''' Prompt the client for weight data,
+        price per unit (kg or lb), PLU, and/or total
+        calculated price.'''
+        
+        to_render = '''<!DOCTYPE HTML>
+                            <html>
+                                <head>
+                                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                    <meta charset='utf-8'>
+                                    <style>
+                                        .input-group {
+                                            display: flex;
+                                            align-items: center;
+                                            gap: 10px; /* Adds spacing between elements */
+                                        }
+                                        .radio-group {
+                                            display: flex;
+                                            gap: 10px; /* Space between radio buttons */
+                                        }
+                                        input[type="text"] {
+                                            padding: 5px;
+                                            font-size: 16px;
+                                        }
+                                    </style>
+                                </head>
+                                <body>
+                                    <form method="GET">
+                                        <!-- Weight input with radio buttons -->
+                                        <div class="input-group">
+                                            <input type="text" name="weight" placeholder="weight" />
+                                            <div class="radio-group">
+                                                <label>
+                                                    <input type="radio" name="wunit" value="kg" checked> kgs
+                                                </label>
+                                                <label>
+                                                    <input type="radio" name="wunit" value="lb"> lbs
+                                                </label>
+                                            </div>
+                                        </div>
+
+                                        <!-- PLU input -->
+                                        <div>
+                                            <input type="text" name="plu" placeholder="plu"/>
+                                        </div>
+
+                                        <!-- Price Rate Override input with radio buttons -->
+                                        <div class="input-group">
+                                            <input type="text" name="price_rate" placeholder="price rate"/>
+                                            <div class="radio-group">
+                                                <label>
+                                                    <input type="radio" name="prunit" value="kg" checked> $/kgs
+                                                </label>
+                                                <label>
+                                                    <input type="radio" name="prunit" value="lb"> $/lbs
+                                                </label>
+                                            </div>
+                                        </div>
+
+                                        <!-- Submit button -->
+                                        <div>
+                                            <button type="submit">Submit</button>
+                                        </div>
+                                    </form>
+                                </body>
+                            </html>
+                            '''
+        return to_render
+
+    # Display the page to the user!
+    def render_page(self, failure: Failure, request):
+        if isinstance(failure, Failure):
+            html = self._generate_html()
+            request.write(html.encode("utf-8"))
+            request.finish()
+
+    def check_params(self, http_response: HTTPResponse | None , request):
+        assert isinstance(http_response, HTTPResponse) or http_response == None
+
+        # Start retrieving all parameters
+        # from the get request.
+        weight = request.args[b"weight"][0].decode("utf-8")
+        weight = html.escape(weight)
+        wunit = request.args[b"wunit"][0].decode("utf-8")
+        wunit = html.escape(wunit)
+
+        plu = request.args[b"plu"][0].decode("utf-8")
+        plu = html.escape(plu)
+
+        price_rate = request.args[b"price_rate"][0].decode("utf-8")
+        price_rate = html.escape(price_rate)
+        prunit = request.args[b"prunit"][0].decode("utf-8")
+        prunit = html.escape(prunit)
+
+        # Organize data and redirect it
+        # to the next callback to generate
+        # the appropriate barcode.
+        w_in_kg = wunit == "kg"
+        pr_in_kg = prunit == "kg"
+        weight = float(weight) # Possible failure: value error
+        assert weight > 0
+        plu = int(plu) # Possible failure: value error
+        assert plu > 0
+        price_rate = float(price_rate) # Possible failure: value error
+        assert price_rate > 0
+        return RealProduct(weight, w_in_kg, plu, price_rate, pr_in_kg)
+    
+    def generate_barcode(self, real_product: RealProduct, request: Request):
+        assert isinstance(real_product, RealProduct)
+        plu = real_product.plu
+        total_price = real_product.total_price
+        assert isinstance(plu, int)
+        assert plu > 0
+        assert isinstance(total_price, float)
+        assert total_price > 0
+
+        # Note that PLUs in our store
+        # are always prepended with a 2. To make
+        # 6 digits of our UPC barcode, we fill any
+        # remaining spaces with 0.
+        plu = str(plu)
+        assert 0 < len(plu) and len(plu) <= PLUBarcodeGeneratorPage.PLU_MAX_LEN
+        if len(plu) != 6:
+            plu = "2" + \
+                "".join(["0" for _ in range(PLUBarcodeGeneratorPage.PLU_MAX_LEN - 1 - len(plu))]) + \
+                plu
+
+        # Check the total price's amount of digits.
+        # We may have any of the following presentations
+        # of prices: $123.45, $12.34, $1.34
+        total_price = "%.2f" % round(total_price, 2)
+        total_price = "".join(total_price.split("."))
+        upc_barcode = plu + \
+            "".join(["0" for _ in range(PLUBarcodeGeneratorPage.PRICE_TOTAL_MAX_LEN - len(total_price))]) + \
+            total_price
+        assert len(upc_barcode) == PLUBarcodeGeneratorPage.MAX_UPC_BARCODE_LEN
+        return (real_product, upc_barcode)
+
+    def render_barcode(self, real_product_upc_barcode: tuple, request):
+        real_product, upc_barcode = real_product_upc_barcode
+
+        if upc_barcode != None:
+            assert len(upc_barcode) == PLUBarcodeGeneratorPage.MAX_UPC_BARCODE_LEN
+
+            # Write the barcode into a stream
+            stream = io.BytesIO()
+            self._bc_generator.write(upc_barcode, stream)
+
+            # Render it onto the page
+            to_render = """<!DOCTYPE HTML>
+            <html>
+                <head>
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <meta charset='utf-8'>
+                    <title>Barcodes</title>
+                    <style>
+                        body {
+                            display: flex;
+                            flex-direction: column; /* Arrange items vertically */
+                            align-items: center; /* Center align the barcodes */
+                            gap: 20px; /* Add spacing between barcodes */
+                            font-family: Arial, sans-serif;
+                        }
+                    </style>
+                </head>
+                <body>
+            """
+            plu = real_product.plu
+            total_price = real_product.total_price
+            to_render += f"<div>PLU: {plu}</div>"
+            to_render += f"<div>Total Price: ${total_price}</div>"
+            to_render += f"<div>{str(stream.getvalue(), 'utf-8')}</div>"
+            to_render += """
+                </body>
+            </html>
+            """
+            request.write(to_render.encode("utf-8"))
+            request.finish()
+
+    def render_GET(self, request: Request):
+        REQ_DICT = {"request": request}
+        d = Deferred()
+        d.addCallback(self.check_params, request=request)
+        d.addCallback(self.generate_barcode, request=request)
+        d.addCallbacks(self.render_barcode, self.render_page,
+                       callbackKeywords=REQ_DICT, errbackKeywords=REQ_DICT)
+        d.callback(None)
+        return NOT_DONE_YET
+
 class SecureBarcodeBruteforcerPage(BarcodeBruteforcerPage, SecureResource):
     def __init__(self, auth_server_url: str):
-        BarcodeBruteforcerPage.__init__(selff)
+        BarcodeBruteforcerPage.__init__(self)
         SecureResource.__init__(self, auth_server_url)
 
     def render_GET(self, request: Request):
@@ -916,6 +1163,19 @@ class SearchPage(HTTPResource):
                             print(e)
                             pass
 
+                    # Allow the client to redirect to
+                    # the PLUBarcodeGeneratorPage to generate
+                    # a scannable barcode given a certain weight.
+                    if key.strip() == "plu":
+                        # foo = f'''<form method="GET" action"/plu_barcode_generator">
+                                    # <input type="hidden" name="plu" value="{code}"/>
+                                    # <input type="hidden" name=
+                                    # <input type="text" name="weight" placeholder="weight" required/>
+                                    # <button type="submit">Generate Barcode</button>
+                                # </form>'''
+
+                        # product_listing_str += foo
+                        pass
             # Write all data to the page
             request.write(b"<pre>" + bytes(product_listing_str, "utf-8") + b"</pre>")
         request.finish()
@@ -1025,11 +1285,11 @@ class SecureSearchPage(SearchPage, SecureResource):
 
         # Start processing!
         d = self._verify_session(request, auth_server_url=self._auth_server_url)
-        d.addCallbacks(self.check_query, self.redirect_login, 
+        d.addCallbacks(self.check_query, self.redirect_login,
                        callbackKeywords={"request": request}, errbackKeywords={"request": request})
         d.addCallbacks(self.search_database, self.render_page,
                        callbackKeywords={"request": request}, errbackKeywords={"request": request})
-        # d.addCallback(self.display_json, request=request)
+        # d.addCallback(suelf.display_json, request=request)
         d.addCallback(self.display_nonjson, request=request)
         return NOT_DONE_YET
 
@@ -1040,6 +1300,7 @@ def get_web_tree_no_auth(item_server_uri):
     root.putChild(b"", HomePage())
     root.putChild(b"search", SearchPage(item_server_uri))
     root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage())
+    root.putChild(b"plu_barcode_generator", PLUBarcodeGeneratorPage())
     return root
 
 def get_web_tree_auth(item_server_uri: str, auth_server_uri: str):
