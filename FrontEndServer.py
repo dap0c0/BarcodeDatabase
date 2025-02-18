@@ -3,7 +3,7 @@ from MongoClient import MongoClientSync
 from HTTPResponse import HTTPResponse
 from SimpleHTTPFactory import SimpleHTTPFactory
 from AuthServer import AuthServerCookie
-from BarcodeGenerator import UPCBarcodeGenerator
+from BarcodeGenerator import BarcodeGenerator, UPCBarcodeGenerator
 from PatternExtractor import PatternExtractor
 from twisted.web.server import Site, NOT_DONE_YET, Session
 from twisted.python.components import registerAdapter
@@ -16,6 +16,7 @@ from twisted.internet import reactor, endpoints, ssl
 from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME, today
 from assets import fonts, colours
 from pymongo.errors import OperationFailure
+from bs4 import BeautifulSoup
 import argparse
 import urllib.parse
 import html
@@ -41,11 +42,30 @@ class Cookie(object):
 # Allow cookie values to persist across sessions.
 registerAdapter(Cookie, Session, ICookie)
 
+class NoPriceRateExtracted(AssertionError):
+    pass
+
 class HTTPResource(Resource, ABC):
-    def _generate_link(self, link_text: str, redirect: str):
+    def _generate_link(self, link_text: str, redirect: str, link_class: str=""):
         assert isinstance(link_text, str)
         assert isinstance(redirect, str)
-        return f'''<a href="{redirect}">{link_text}</a>'''
+        result = f'<a href="{redirect}"' + \
+            (f' class="{link_class}"' if link_class != "" else "") + \
+            f">{link_text.strip()}</a>"
+
+        return result
+
+    def _gen_upc_barcode_str(self,
+                                bc_generator: UPCBarcodeGenerator,
+                                upc_code: str) -> str:
+        assert isinstance(upc_code, str)
+        assert len(upc_code) == 11 or len(upc_code) == 12
+        assert int(upc_code) # UPC should be all integer characters
+        stream = io.BytesIO()
+        self._bc_generator.write(upc_code, stream)
+        return str(stream.getvalue(), "utf-8").replace('''<!DOCTYPE svg
+  PUBLIC '-//W3C//DTD SVG 1.1//EN'
+  'http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd'>''', '')
 
     def _promise_http(self,
                       url: str,
@@ -192,46 +212,53 @@ class RealProduct():
     KG_TO_LBS_RATIO = 2.20462262
 
     def __init__(self,
-                    weight: float,
+                    weight: float | None,
                     w_in_kg: bool,
                     plu: int,
                     price_rate: float,
-                    pr_in_kg: bool):
-        assert isinstance(weight, float)
+                    pr_unit: str):
+        assert isinstance(weight, float) or weight == None
         assert isinstance(w_in_kg, bool)
         assert isinstance(plu, int)
         assert isinstance(price_rate, float)
-        assert isinstance(pr_in_kg, bool)
+        assert isinstance(pr_unit, str)
         self.weight = weight
         self.w_in_kg = w_in_kg
         self.plu = plu
         self.price_rate = price_rate
-        self.pr_in_kg = pr_in_kg
-        self.total_price = None
-        self._calculate_total_price()
+        self.pr_unit = pr_unit
+        self.total_price = self._calculate_total_price()
 
     def _calculate_total_price(self):
-        if self.w_in_kg:
-            # Weight: kg, Rate: $/kg
-            if self.pr_in_kg:
-                self.total_price = self.weight * self.price_rate
+        total_price = float()
 
-            # Weight: kg, Rate: $/lb
-            # Convert kgs => lbs
+        if self.weight:
+            if self.w_in_kg:
+                # Weight: kg, Rate: $/kg
+                if self.pr_unit == "kg":
+                    total_price = self.weight * self.price_rate
+
+                # Weight: kg, Rate: $/lb
+                # Convert kgs => lbs
+                elif self.pr_unit == "lb":
+                    total_price = self.weight * RealProduct.KG_TO_LBS_RATIO * self.price_rate
+
             else:
-                self.total_price = self.weight * RealProduct.KG_TO_LBS_RATIO * self.price_rate
+                # Weight: lb, rate: $/kg
+                # Convert lbs => kgs
+                if self.pr_unit == "kg":
+                    total_price = (self.weight / RealProduct.KG_TO_LBS_RATIO) * self.price_rate
+
+                # Weight: lb, rate: $/lb
+                elif self.pr_unit == "lb":
+                    total_price = self.weight * self.price_rate
 
         else:
-            # Weight: lb, rate: $/kg
-            # Convert lbs => kgs
-            if self.pr_in_kg:
-                self.total_price = (self.weight / RealProduct.KG_TO_LBS_RATIO) * self.price_rate
+            assert self.pr_unit == "ea"
+            total_price = self.price_rate
 
-            # Weight: lb, rate: $/lb
-            else:
-                self.total_price = self.weight * self.price_rate
-
-        assert self.total_price > 0
+        assert total_price > 0
+        return total_price
 
 class LoginPage(SecureResource):
     def _generate_login_forms(self):
@@ -516,8 +543,6 @@ class BarcodeBruteforcerPage(HTTPResource):
                 right_y_i = upc[y_i:]
                 valid_upc = left_x_i + str(x) + between_x_y + str(y) + right_y_i
                 valid_upcs.append(valid_upc)
-
-
 
         # Case 5: {O, O}
         # 10 - C - (E + 3O) = 3(x + y) mod 10
@@ -834,6 +859,9 @@ class PLUBarcodeGeneratorPage(HTTPResource):
                                                 <label>
                                                     <input type="radio" name="prunit" value="lb"> $/lbs
                                                 </label>
+                                                <label>
+                                                    <input type="radio" name="prunit" value="ea"> $/ea
+                                                </label>
                                             </div>
                                         </div>
 
@@ -876,14 +904,17 @@ class PLUBarcodeGeneratorPage(HTTPResource):
         # to the next callback to generate
         # the appropriate barcode.
         w_in_kg = wunit == "kg"
-        pr_in_kg = prunit == "kg"
-        weight = float(weight) # Possible failure: value error
-        assert weight > 0
+        try:
+            weight = float(weight) # Possible failure: value error
+            assert weight > 0
+        except ValueError:
+            weight = None
+
         plu = int(plu) # Possible failure: value error
         assert plu > 0
         price_rate = float(price_rate) # Possible failure: value error
         assert price_rate > 0
-        return RealProduct(weight, w_in_kg, plu, price_rate, pr_in_kg)
+        return RealProduct(weight, w_in_kg, plu, price_rate, prunit)
     
     def generate_barcode(self, real_product: RealProduct, request: Request):
         assert isinstance(real_product, RealProduct)
@@ -1019,6 +1050,8 @@ class SearchPage(HTTPResource):
                 pass
 
         self._bc_generator = UPCBarcodeGenerator(50, add_checksum=False)
+        self._pattern_extractor = PatternExtractor()
+
 
     def render_GET(self,
                    request):
@@ -1028,6 +1061,7 @@ class SearchPage(HTTPResource):
         d.addCallbacks(self.search_database, self.render_page,
                     callbackKeywords={"request": request}, errbackKeywords={"request": request})
         d.addCallback(self.display_nonjson, request=request)
+
         # Fire off chain of events
         d.callback(None)
         return NOT_DONE_YET
@@ -1118,67 +1152,120 @@ class SearchPage(HTTPResource):
             query_matches = {item["_id"]: item for item in cursor}
         return query_matches
 
-    # Pretty print all data for the client on the page.
-    def display_json(self,
-                     data: dict,
-                     request):
-        assert isinstance(data, dict)
-        request.write(b"<pre>" + bytes(json.dumps(data, indent=4), "utf-8") + b"</pre>")
-        request.finish()
-
     def display_nonjson(self,
                         matches: dict,
                         request):
         assert isinstance(matches, dict)
+        page_html = ""
+
         for _, product in matches.items():
             title = product["product_title"]
             brand = "(brand n/a)" if product["product_brand"] == "" else product["product_brand"]
             link = product["product_url"]
             id = product["product_id"]
             pps = product["product_package_size"]
-            product_listing = [self._generate_link(title, f"https://realcanadiansuperstore.ca{link}"), brand, id, pps]
+            product_listing = [
+                self._generate_link(title, f"https://realcanadiansuperstore.ca{link}", "link"),
+                brand, id, pps]
             
+            product_html = "<div>"
+            # General info
             for datum in product_listing:
                 if datum == "":
                     product_listing.remove(datum)
-            product_listing_str = "\n".join(product_listing) + "\n"
+            product_html += "\n".join([f"<div>{i}</div>" for i in product_listing]) + "\n"
 
             # Price info (nested)
             for key, price in product["prices"].items():
                 if price != "":
-                    product_listing_str += f"{key}: {price}\n".replace("_", " ")
+                    product_html += f"<div>{key}: {price}</div>".replace("_", " ")
 
             # Code info (nested)
             for key, code in product["codes"].items():
-                if code != "":
-                    product_listing_str += f"{key}: {code}\n"
-                    
-                    if key.strip() == "upc":
-                        stream = io.BytesIO()
-                        try:
-                            self._bc_generator.write(code, stream)
-                            product_listing_str += f"<div>{str(stream.getvalue(), 'utf-8')}</div>"
-                            
-                        except Exception as e:
-                            print(e)
-                            pass
-
-                    # Allow the client to redirect to
-                    # the PLUBarcodeGeneratorPage to generate
-                    # a scannable barcode given a certain weight.
-                    if key.strip() == "plu":
-                        # foo = f'''<form method="GET" action"/plu_barcode_generator">
-                                    # <input type="hidden" name="plu" value="{code}"/>
-                                    # <input type="hidden" name=
-                                    # <input type="text" name="weight" placeholder="weight" required/>
-                                    # <button type="submit">Generate Barcode</button>
-                                # </form>'''
-
-                        # product_listing_str += foo
+                if code != "" and key.strip() == "upc":
+                    try:
+                        product_html += f"<div>{self._gen_upc_barcode_str(self._bc_generator, code)}</div>"
+                        
+                    except Exception:
                         pass
-            # Write all data to the page
-            request.write(b"<pre>" + bytes(product_listing_str, "utf-8") + b"</pre>")
+                        
+                # Allow the client to redirect to
+                # the PLUBarcodeGeneratorPage to generate
+                # a scannable barcode given a certain weight.
+                if code != "" and key.strip() == "plu":
+                    product_html += f"{key}: {code}\n"
+                    # In order of preference from kg -> lb -> ea,
+                    # extract the first price rate that presents itself
+                    price_rate, prunit = self._get_pr_prunit(product)
+                    wunit = "kg"
+                    plu = code
+                    weight_line = (
+                        '<input type="hidden" name="weight" />' if prunit == "ea"
+                        else '<input type="text" name="weight" placeholder="Weight (kg)" required/>')
+
+                    form_html = f'''<form method="GET" action="/plu_barcode_generator">
+                                {weight_line}
+                                <button type="submit">Generate Barcode</button>
+                                <input type="hidden" name="wunit" value="{wunit}"/>
+                                <input type="hidden" name="plu" value="{plu}"/>
+                                <input type="hidden" name="price_rate" value="{price_rate}"/>
+                                <input type="hidden" name="prunit" value="{prunit}"/>
+                            </form>'''
+                    product_html += form_html
+            product_html += '<div style="border-bottom: 1px solid #ccc; margin-top: 10px;"></div>'
+            product_html += "</div>"
+            page_html += product_html
+
+        # Write all data to the page
+        soup = BeautifulSoup(page_html, "html.parser")
+        page_html = '''<!DOCTYPE html>
+                            <html>
+                                <head>
+                                    <style>
+                                        body {
+                                            display: flex;
+                                            flex-direction: column;
+                                            white-space: normal;
+                                            font-family: Menlo;
+                                            font-size: 14px;
+                                            min-height: 100vh;
+                                            padding: 5px
+                                            margin: 0;
+                                        }
+                                        .link {
+                                            white-space: pre-wrap;
+                                            font-size: inherit;
+                                            word-wrap: break-word;
+                                            max-width: 30ch;
+                                            font-size: inherit;
+                                            font-family: inherit;
+                                        }
+                                        input[type="text"] {
+                                            padding: 5px;
+                                            width: 100px;
+                                            font-size: inherit;
+                                            font-family: inherit;
+                                        }
+                                        button {
+                                            font-size; inherit;
+                                            font-family: inherit;
+                                        }
+                                        form {
+                                            display: flex;
+                                            width: 10px;
+                                            margin: 0;
+                                            padding: 0;
+                                        }
+                                    </style>
+                                </head>''' + \
+                            f'''<body>
+                                    {str(soup)}
+                                </body>
+                        </html>
+                            '''
+        request.write(bytes(page_html, "utf-8"))
         request.finish()
+
         # <------- Helper Functions ------>
     def _check_valid_regex(self, regex):
         ''' Check whether the regex string
@@ -1194,77 +1281,71 @@ class SearchPage(HTTPResource):
 
         return True
 
-    def _has_match(self,
-                  regex: str,
-                  dictionary: dict) -> bool:
-        ''' Check whether the dictionary has a value field
-        which matches the regex.
-        Key fields are ignored from regex search.'''
-        assert isinstance(regex, str)
-        assert isinstance(dictionary, dict)
-        
-        # Start matching by iterating through each key.
-        # If the string is present in the item
-        # title, return the entire item. If the string is present
-        # as a key value of the item, return the entire item.
-        # pattern_str = ".*%s.*" % regex
-        pattern_str = "%s" % regex
-        pattern_compiled = re.compile(re.escape(pattern_str), re.IGNORECASE)
+    def _get_pr_prunit(self, product: dict):
+        ''' Extract (<price_rate>, <prunit>) from the given product.'''
+        price_map = {f"dol_per_{unit}": unit for unit in ["kg", "lb", "ea"]}
+        pps = product["product_package_size"]
+        price_rate = prunit = None
+        try:
+            for key, pr in self._get_price(pps).items():
+                if pr != None and key in price_map:
+                    price_rate, prunit = pr, price_map[key]
+                    break
 
-        # Prevent redundant recompilation of regex
-        # pattern through the driver.
-        def recursive_driver(pattern_compiled,
-                                dictionary: dict):
-            for key in dictionary:
-                assert isinstance(key, str)
-                value = dictionary[key]
-                assert isinstance(value, str) or isinstance(value, dict)
+        # The data in pps (price descriptor string) contains no
+        # price rate per unit. It is something simple yet
+        # strange like '1 ea' or '1 kg'.
+        except NoPriceRateExtracted:
+            for _, price in product["prices"].items():
+                if price != "":
+                    price_rate = float(price.split("$")[1].strip())
+                    prunit = "ea"
+                    break
+        finally:
+            assert price_rate != None and prunit != None, breakpoint()
+            return (price_rate, prunit)
 
-                if isinstance(value, str):
-                    if pattern_compiled.search(value) == None:
-                        continue
-                    
-                    else:
-                        return True
+    def _get_price(self, price_descriptor: str) -> dict:
+        ''' Attempt to extract the price rate(s)
+        from the supplied price description string, like:
+       "$21.58/1kg $9.79/1lb" or "1.5 kg, $1.53/100g"'''
+        price_descriptor = price_descriptor.strip()
+        data = {
+            "dol_per_kg": None,
+            "dol_per_lb": None,
+            "dol_per_ea": None
+        }
+        gen_rate_pat = r"(?:\$(\d+\.\d{2})/(?:(\d+)(kg|g|lb|ea)))"
+        self._pattern_extractor.set_pattern(gen_rate_pat)
+        matches = self._pattern_extractor.get_matches(price_descriptor)
+        data_filled = False
 
-                elif isinstance(value, dict):
-                    return recursive_driver(pattern_compiled, value)
+        for match in matches:
+            price, num_units, unit = match
+            price = float(price)
+            num_units = int(num_units)
 
-        # Begin recursion
-        return recursive_driver(pattern_compiled, dictionary)
+            if unit == "kg":
+                data["dol_per_kg"] = price / num_units
+                data_filled = True
 
-    def _clean_whitespace(self,
-                          string: str):
-        assert isinstance(string, str)
-        return " ".join(string.split())
+            # Note: there are 1000g/kg
+            if unit == "g":
+                data["dol_per_kg"] = (price / num_units) * 1000
+                data_filled = True
 
-    def _get_matches(self,
-                    query: str,
-                    items: list) -> list:
-        assert isinstance(query, str)
-        assert isinstance(items, list)
-        matches = []
+            if unit == "lb":
+                data["dol_per_lb"] = price / num_units
+                data_filled = True
 
-        # If the query has any spaces,
-        # treat them as seperate tokens!
-        query = self._clean_whitespace(query)
-        tokens = query.split(" ")
+            if unit == "ea":
+                data["dol_per_ea"] = price / num_units
+                data_filled = True
+            
+        if not data_filled:
+            raise NoPriceRateExtracted(f"No price rate extracted from {price_descriptor}")
 
-        # Start search for all items.
-        # Note that for any given item,
-        # all tokens must match within the dictionary.
-        for item in items:
-            assert isinstance(item, dict)
-            item_matched = True
-
-            for token in tokens:
-                if not self._has_match(token, item):
-                    item_matched = False
-
-            if item_matched:
-                matches.append(item)
-
-        return matches
+        return data
 
 class SecureSearchPage(SearchPage, SecureResource):
     def __init__(self,
