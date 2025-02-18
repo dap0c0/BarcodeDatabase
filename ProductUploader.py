@@ -1,57 +1,70 @@
-from ProductUploader import JSONProductUploader
-import asyncio
-import argparse
+from MongoClient import MongoClientAsync
+from abc import ABC, abstractmethod
+import json
 
-async def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-isuri", "--item-server-uri", action="store", dest="item_server_uri", required=True, type=str)
-    parser.add_argument("-d", "--debug", action="store_false", dest="debug")
-    parser.add_argument("-f", "--file", action="store", dest="file")
-    parser.add_argument("-db", "--database", action="store", dest="database", required=True, type=str)
-    parser.add_argument("-col", "--collection", action="store", dest="collection", required=True, type=str)
+class ProductUploader(ABC):
+    UPSERT = True
+    def __init__(self, isuri: str, database: str, collection: str, filename: str, debug: bool=False):
+        assert isinstance(filename, str)
+        assert isinstance(isuri, str)
+        self._filename = filename
+        self._database = database
+        self._collection = collection
+        self._debug = debug
+        self._client = MongoClientAsync(isuri)
+        self._client.select_collection(database, collection)
 
-    # push changes
-    mxg_a = parser.add_argument_group()
-    mxg_a.add_argument("--push", action="store_true", dest="push")
-    mxg_a.add_argument("-qfn", "--query-filter-name", action="store", dest="query_filter_name", default=JSONProductUploader.DEFAULT_QUERY_FILTER)
+    @abstractmethod
+    async def push_changes(self, query_filter_name: str):
+        pass
 
-    # Get products
-    mxg_b = parser.add_argument_group()
-    mxg_b.add_argument("--get", action="store_true", dest="get")
+    @abstractmethod
+    async def get_products(self):
+        pass
 
-    # Parse args and verify that only one
-    # version of the program is desired (upload XOR get products).
-    args = parser.parse_args()
-    item_server_uri = args.item_server_uri
-    database = args.database
-    collection = args.collection
-    debug = args.debug
-    file = args.file
-    push = args.push
-    query_filter_name = args.query_filter_name
-    get = args.get
+class JSONProductUploader(ProductUploader):
+    ''' Allow client to write changes to a file
+    and have those changes pushed to the item server.'''
 
-    push_chosen = push
-    get_chosen = get
+    DEFAULT_QUERY_FILTER = "_id"
+    DEFAULT_OUTPUT_FILENAME = "products.json"
+    DEFAULT_INDENT = 4
+    def __init__(self, isuri: str, database: str, collection: str, debug: bool=False, filename: str=DEFAULT_OUTPUT_FILENAME,):
+        ProductUploader.__init__(self, isuri, database, collection, filename, debug)
 
-    if push_chosen and get_chosen:
-        raise parser.error("Cannot simulatenously get products and push!")
+    async def push_changes(self, query_filter_name: str=DEFAULT_QUERY_FILTER):
+        assert isinstance(query_filter_name, str)
+        assert query_filter_name != ""
 
-    elif not push_chosen and not get_chosen:
-        raise parser.error("push or get must be provided!")
+        with open(self._filename, "r") as rfile:
+            data_dict = json.load(rfile)
+            doc_pairs = []
 
-    # All arguments provided are validated!
-    # Start program.
-    if file:
-        product_interface = JSONProductUploader(item_server_uri, database, collection, debug, file)
+            for _, item in data_dict.items():
+                assert isinstance(item, dict), f"{item} is not a dict!"
+                query_filter = {query_filter_name: item[query_filter_name]}
+                data_to_push = item
+                doc_pairs.append((query_filter, data_to_push, self.UPSERT))
 
-    else:
-        product_interface = JSONProductUploader(item_server_uri, database, collection, debug)
+            if self._debug:
+                print(f"Pushing {len(doc_pairs)} products to {self._database}.{self._collection}...")
 
-    if push_chosen:
-        await product_interface.push_changes(query_filter_name)
+            await self._client.bulk_replace(doc_pairs)
+            print(f"Success!")
 
-    elif get_chosen:
-        await product_interface.get_products()
+    async def get_products(self):
+        product_json = {}
+        cursor = await self._client.find({})
 
-asyncio.run(main())
+        async for item in cursor:
+            assert isinstance(item, dict)
+            product_json[item["_id"]] = item
+
+        if self._debug:
+            print(f"Got {len(product_json)} product(s)!")
+        
+        with open(self._filename, "w") as wfile:
+            json.dump(product_json, wfile, indent=self.DEFAULT_INDENT)
+
+            if self._debug:
+                print(f"Dumped json to {self._filename}")
