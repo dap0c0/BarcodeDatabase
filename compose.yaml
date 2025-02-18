@@ -29,7 +29,7 @@ services:
     # the container. In this image, it is also impossible to cat
     # files. Hence, we don't mount secret volumes in this service; we use
     # a tedious and insecure workaround.
-    command: sh -c "tunnel --no-autoupdate run --token <insert token here>
+    command: tunnel --no-autoupdate run --token 
 
 # Secret volumes
 secrets:

@@ -317,7 +317,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             with open(self._leafs_filepath, "r") as rfile:
                 leafs_dict = json.load(rfile)
 
-        # Begin scraping and Writing
+        # Begin scraping and writing
         # each product to the database.
         await self._scrape_products(leafs_dict, workers)
 
@@ -360,18 +360,12 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         async for doc in code_cursor:
             updates.append(({"_id": doc["_id"]}, {"$set": {"codes": doc["codes"]}}))
 
-        print(updates)
-
         # Update all the code data in
         # the destination collection
-        # TODO: refactor the client to allow operations without
-        # collection selection. Possibility for bugs due to
-        # the presence of a global (collection).
         self._db_client.select_collection(db_dest, col_dest)
         if len(updates) != 0:
             result = await self._db_client.bulk_update(updates)
             return result
-
         return None
 
     async def _scrape_products(self,

@@ -4,8 +4,6 @@ import re
 import os
 import barcode
 
-# For me, runs only on python 2.7
-
 class BarcodeGenerator(object):
     __metaclass__ = ABCMeta
     MIN_ID_LENGTH = 10
