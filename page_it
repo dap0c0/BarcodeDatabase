@@ -67,8 +67,8 @@ if __name__ == "__main__":
             await pi.initialize()
             await pi.scrape(grocery, home_beauty_baby, joe_fresh, workers)
 
-        async with async_playwright() as p:
     async def run_test():
+        async with async_playwright() as p:
             try:
                 pi = RealCanadianPageIteratorAsyncDiv(playwright=p,
                                                 browser="chromium",
