@@ -155,6 +155,15 @@ class MongoClientAsync(MongoClient):
         self._verify_collection()
         return await self._collection.create_index(key)
 
+    async def create_text_index(self,
+                          *fields):
+        if fields:
+            self._verify_collection()
+            return await self._collection.create_index(
+                [(f, "text") for f in fields],
+                default_language="english"
+            )
+
     async def check_exists_db(self,
                               database: str):
         assert isinstance(database, str)
