@@ -252,3 +252,6 @@ class MongoClientSync(MongoClient):
         assert isinstance(filter, dict) or filter == None
         self._verify_collection()
         return self._collection.find_one(filter)
+    
+    def drop_collection(self):
+        return self._collection.drop()
