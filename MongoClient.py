@@ -48,6 +48,10 @@ class MongoClient(ABC):
                      key: str):
         pass
 
+    @abstractmethod
+    def drop_collection(self):
+        pass
+        
     def select_collection(self,
                            database: str,
                            collection: str):
@@ -87,6 +91,9 @@ class MongoClientAsync(MongoClient):
             assert isinstance(document, dict)
 
         return await self._collection.insert_many(documents, ordered)
+
+    async def drop_collection(self):
+        return await self._collection.drop()
 
     # Replacement
     async def replace_one(self,
