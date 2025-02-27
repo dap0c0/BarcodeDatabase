@@ -386,7 +386,13 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             leafs = leafs_dict[department]
             f"Iterating {len(leafs)} leafs for {department}"
             self._db_client.select_collection(database=department, collection=todays_date)
+            
+            # TODO: instead of creating search indices here,
+            # it might help to dedicate an intermediate proxy-server
+            # to process the incoming data and add the indices.
+            # Such a server might aid in encapsulating search funtionality.
             await self._db_client.create_index("_id")
+            await self._db_client.create_text_index("$**")
             counter = 0
             
             for leaf in leafs:
