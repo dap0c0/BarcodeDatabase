@@ -68,18 +68,18 @@ class DBMaintainer():
             curr_date_str = self._df.get_date_str(date)
             proceed = True
 
-            if self._interactive:
-                message = f"Do you wish to drop {db}.{curr_date_str}? (y/n): "
-                proceed = self._prompt_action(message)
+            if await self._client.check_exists_col(db, curr_date_str):
+                if self._interactive:
+                    message = f"Do you wish to drop {db}.{curr_date_str}? (y/n): "
+                    proceed = self._prompt_action(message)
 
-            if proceed:
-                if await self._client.check_exists_col(db, curr_date_str):
+                if proceed:
                     self._client.select_collection(db, curr_date_str)
+                    print(f"Dropping {db}.{curr_date_str}")
                     await self._client.drop_collection()
-                    print(f"Deleting {db}.{curr_date_str}")
 
-                else:
-                    print(f"{db}.{curr_date_str} doesn't exist! Skipping.")
+            else:
+                print(f"{db}.{curr_date_str} doesn't exist! Skipping.")
 
     async def aggregrate_codes(self, db: str, start_date: str, end_date: str, dest_col: str) -> int:
         ''' For <db> from <start_date> (incl.) to <end_date> (incl.),
@@ -98,8 +98,73 @@ class DBMaintainer():
         assert isinstance(start_date, str)
         assert isinstance(end_date, str)
         assert isinstance(dest_col, str)
+        assert await self._client.check_exists_db(db)
 
-        return 1
+        # Iterate over the established interval of dates
+        # (inclusively). It does not matter whether
+        # start_date < end_date or vice versa.
+        for date in DateTimeRange(start_date, end_date):
+            curr_date_str = self._df.get_date_str(date)
+            proceed = True
+
+            if await self._client.check_exists_col(db, curr_date_str):
+                if self._interactive:
+                    message = f"Do you wish to aggregrate {db}.{curr_date_str}\n" +\
+                        f"to {db}.{dest_col}? (y/n): "
+                    proceed = self._prompt_action(message)
+
+                if proceed:
+                    print(f"Migrating codes from {db}.{curr_date_str} to {db}.{dest_col}")
+                    extra_fields = ["product_title", "product_brand", "product_url"]
+
+                    await self._migrate_codes(extra_fields, db,
+                                              curr_date_str, db, dest_col)
+                
+            else:
+                print(f"{db}.{curr_date_str} doesn't exist! Skipping.")
+
+    async def _migrate_codes(self,
+                            extra_fields: list,
+                            db_src: str,
+                            col_src: str,
+                            db_dest: str,
+                            col_dest: str):
+        ''' For every product in db_src.col_src with
+        any data (UPC, EAN, etc.), migrate those codes to the
+        respective item in db_dest.col_dest.'''
+        # Verify that all the provided extra fields
+        # are strings!
+        for field in extra_fields:
+            if not isinstance(field, str):
+                raise TypeError(f"{field} is not a string!")
+
+        # Get all documents with code data
+        # from the source collection
+        self._client.select_collection(db_src, col_src)
+        code_cursor = await self._client.find({
+            "codes": {
+                "$ne": {
+                    "upc": "",
+                    "ean": "",
+                    "plu": ""
+                }
+            }
+        })
+        updates = []
+
+        async for doc in code_cursor:
+            to_set = {"codes": doc["codes"]}
+            to_set.update({field: doc[field] for field in extra_fields})
+            updates.append(({"_id": doc["_id"]},
+                            {"$set": to_set}))
+
+        # Update all the code data in
+        # the destination collection
+        self._client.select_collection(db_dest, col_dest)
+        if len(updates) != 0:
+            result = await self._client.bulk_update(updates, upsert=True)
+            return result
+        return None
 
     def _prompt_action(self, message: str, agreement: list=AGREE_CHARS):
         assert isinstance(message, str)

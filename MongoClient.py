@@ -127,7 +127,8 @@ class MongoClientAsync(MongoClient):
 
     # Update
     async def bulk_update(self,
-                          document_pairs: list):
+                          document_pairs: list,
+                          upsert: bool=False):
         assert isinstance(document_pairs, list)
         self._verify_collection()
         operations = []
@@ -138,7 +139,7 @@ class MongoClientAsync(MongoClient):
             query_filter, update_dict = pair
             assert isinstance(query_filter, dict)
             assert isinstance(update_dict, dict)
-            operations.append(pymongo.UpdateOne(query_filter, update_dict))
+            operations.append(pymongo.UpdateOne(query_filter, update_dict, upsert=upsert))
 
         # Start bulk update
         return await self._collection.bulk_write(operations)
