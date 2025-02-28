@@ -1,0 +1,56 @@
+#! /opt/homebrew/bin/python3.11
+# Change the path to match your python location
+from DBMaintainer import DBMaintainer
+from Globals import Department
+import sys
+import asyncio
+import argparse
+
+async def main():
+    parser = argparse.ArgumentParser(description='''
+    Basic code migration script that
+    synchronizes the destination column
+    with the code data found in the date
+    interval of [start-date, end-date].''')
+    parser.add_argument("-isuri", "--item-server-uri", action="store", dest="isuri", required=True, type=str)
+    parser.add_argument("-dbs", "--databases", action="append", nargs="+", dest="databases", required=True, type=str)
+    parser.add_argument("-s", "--start-date", action="store", dest="start_date", required=True, type=str)
+    parser.add_argument("-e", "--end-date", action="store", dest="end_date", required=True, type=str)
+    parser.add_argument("-dc", "--dest-col", action="store", dest="dest_col", type=str, required=True)
+    parser.add_argument("-i", dest="interactive", action="store_true")
+    args = parser.parse_args()
+    db_maintainer = DBMaintainer(args.isuri, args.interactive)
+    deps = args.databases[0]
+    existing_deps = [dep.value for dep in Department]
+
+    # Verify that the collection dest_col
+    # is not a static, accumulate collection! The accumulate collection is
+    # meant to store non-stateful data, whereas dynamic collections
+    # like "2025-02-28" are meant to store such data like
+    # product_package_size, price, price_descriptor.
+    if not db_maintainer.is_date_col(args.dest_col):
+        print(f"'{args.dest_col}' should not be selected as a destination collection!")
+        sys.exit()
+
+    # Allow "all" to be supplied to --databases.
+    # If it is, iterate through all databases.
+    # Get all existing department names in the Department enum.
+    if "all" in deps:
+        deps = existing_deps
+
+    # Check that every department/department is valid
+    for dep in deps:
+        assert isinstance(dep, str)
+        if dep not in existing_deps:
+            print(f"The department '{dep}' is invalid!\nPlease choose from {existing_deps}", file=sys.stderr)
+            sys.exit()
+
+    # Every department is valid!
+    # Now, update every collection in
+    # the established range for each dep.
+    for dep in deps:
+        print(f"#---- Current department: {dep} ----#")
+        await db_maintainer.aggregrate_codes(dep, args.start_date, args.end_date, args.dest_col, upsert=False)
+        print()
+    
+asyncio.run(main())
