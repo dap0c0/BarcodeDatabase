@@ -24,6 +24,17 @@ async def main():
     deps = args.databases[0]
     existing_deps = [dep.value for dep in Department]
 
+    # Verify that the accumulate collection (dest_col)
+    # is not a dynamic collection! The accumulate collection is
+    # meant to allow upserts WITHOUT stateful data such as price and
+    # product package size. If such data were to be upserted into a
+    # dynamic collection like "2025-02-28", the data format of the
+    # collection would be inconsistent, as some documents would have
+    # stateful data and others no.
+    if db_maintainer.is_date_col(args.dest_col):
+        print(f"'{args.dest_col}' should not be selected as a destination collection!")
+        sys.exit()
+
     # Allow "all" to be supplied to --databases.
     # If it is, iterate through all databases.
     # Get all existing department names in the Department enum.
@@ -42,7 +53,7 @@ async def main():
     # the established range for each dep.
     for dep in deps:
         print(f"#---- Current department: {dep} ----#")
-        await db_maintainer.aggregrate_codes(dep, args.start_date, args.end_date, args.dest_col)
+        await db_maintainer.aggregrate_codes(dep, args.start_date, args.end_date, args.dest_col, upsert=True)
         print()
     
 asyncio.run(main())

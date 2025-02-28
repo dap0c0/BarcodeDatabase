@@ -39,7 +39,6 @@ class DateFormatter():
 
         # Check that the format is correct!
         if len(params) != len(self._format_order):
-            breakpoint()
             raise InvalidDateFormatStringError(f"{formatted_str} doesn't match {self._date_format}!")
 
         # Verify that all values provided are indeed numeric

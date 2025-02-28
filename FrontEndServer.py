@@ -1159,6 +1159,7 @@ class SearchPage(HTTPResource):
         page_html = ""
 
         for _, product in matches.items():
+            breakpoint()
             title = product["product_title"]
             brand = "(brand n/a)" if product["product_brand"] == "" else product["product_brand"]
             link = product["product_url"]

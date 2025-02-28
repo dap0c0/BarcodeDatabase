@@ -1,5 +1,5 @@
 from MongoClient import MongoClientAsync, CollectionNotFound
-from DateFormatter import DateFormatter
+from DateFormatter import DateFormatter, InvalidDateFormatStringError
 from datetime import datetime, timedelta
 
 class DateTimeRange():
@@ -81,7 +81,7 @@ class DBMaintainer():
             else:
                 print(f"{db}.{curr_date_str} doesn't exist! Skipping.")
 
-    async def aggregrate_codes(self, db: str, start_date: str, end_date: str, dest_col: str) -> int:
+    async def aggregrate_codes(self, db: str, start_date: str, end_date: str, dest_col: str, upsert: bool) -> int:
         ''' For <db> from <start_date> (incl.) to <end_date> (incl.),
         aggregrate all code data (upc, ean, plu) to <dest_col>.
         Disregard all price data of all products.
@@ -115,20 +115,31 @@ class DBMaintainer():
 
                 if proceed:
                     print(f"Migrating codes from {db}.{curr_date_str} to {db}.{dest_col}")
-                    extra_fields = ["product_title", "product_brand", "product_url"]
+                    extra_fields = ["product_title", "product_brand", "product_url", "product_id"]
 
                     await self._migrate_codes(extra_fields, db,
-                                              curr_date_str, db, dest_col)
+                                              curr_date_str, db, dest_col, upsert=upsert)
                 
             else:
                 print(f"{db}.{curr_date_str} doesn't exist! Skipping.")
+
+    def is_date_col(self, date_col: str):
+        assert isinstance(date_col, str)
+
+        try:
+            self._df.get_datetime(date_col)
+            return True
+
+        except InvalidDateFormatStringError:
+            return False
 
     async def _migrate_codes(self,
                             extra_fields: list,
                             db_src: str,
                             col_src: str,
                             db_dest: str,
-                            col_dest: str):
+                            col_dest: str,
+                            upsert: bool):
         ''' For every product in db_src.col_src with
         any data (UPC, EAN, etc.), migrate those codes to the
         respective item in db_dest.col_dest.'''
@@ -154,7 +165,12 @@ class DBMaintainer():
 
         async for doc in code_cursor:
             to_set = {"codes": doc["codes"]}
-            to_set.update({field: doc[field] for field in extra_fields})
+            
+            try:
+                to_set.update({field: doc[field] for field in extra_fields})
+
+            except KeyError:
+                breakpoint()
             updates.append(({"_id": doc["_id"]},
                             {"$set": to_set}))
 
@@ -162,7 +178,7 @@ class DBMaintainer():
         # the destination collection
         self._client.select_collection(db_dest, col_dest)
         if len(updates) != 0:
-            result = await self._client.bulk_update(updates, upsert=True)
+            result = await self._client.bulk_update(updates, upsert=upsert)
             return result
         return None
 
