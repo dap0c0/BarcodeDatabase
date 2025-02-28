@@ -10,7 +10,7 @@ DEFAULT_ACCUMULATE_COL = "accumulate"
 async def main():
     parser = argparse.ArgumentParser(description='''
     Basic code migration script that
-    synchronizes the destination column
+    updates the destination column
     with the code data found in the date
     interval of [start-date, end-date].''')
     parser.add_argument("-isuri", "--item-server-uri", action="store", dest="isuri", required=True, type=str)
@@ -49,8 +49,9 @@ async def main():
             sys.exit()
 
     # Every department is valid!
-    # Now, drop every collection in
-    # the established range for each dep.
+    # Now, migrate the relevant data from every collection in
+    # the established range into <department>.accumulate
+    # for each department.
     for dep in deps:
         print(f"#---- Current department: {dep} ----#")
         await db_maintainer.aggregrate_codes(dep, args.start_date, args.end_date, args.dest_col, upsert=True)
