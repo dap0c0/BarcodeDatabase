@@ -8,22 +8,23 @@ from string import ascii_uppercase
 class ProductUploader(ABC):
     UPSERT = True
     DEFAULT_QUERY_FILTER = "_id"
-    def __init__(self, isuri: str, database: str, collection: str, filename: str, debug: bool=False):
-        assert isinstance(filename, str)
+    def __init__(self, isuri: str, database: str, collection: str):
         assert isinstance(isuri, str)
-        self._filename = filename
         self._database = database
         self._collection = collection
-        self._debug = debug
         self._client = MongoClientAsync(isuri)
         self._client.select_collection(database, collection)
 
     @abstractmethod
-    async def push_changes(self, query_filter_name: str):
+    async def push_changes(self, query_filter_name: str) -> int:
         pass
 
     @abstractmethod
     async def get_products(self):
+        pass
+
+    @abstractmethod
+    def write_file(self, products: dict, filename: str):
         pass
 
 class SpreadsheetProductUploader(ProductUploader):
@@ -34,25 +35,27 @@ class SpreadsheetProductUploader(ProductUploader):
     it is necessary to convert all spreadsheet data
     into json before uploading.
     '''
-    DEFAULT_FILENAME_SPREADSHEET = "products.xlsx"
+    DEFAULT_OUTPUT_FILENAME = "products.xlsx"
 
-    def __init__(self, isuri: str, database: str, collection: str, filename: str, debug: bool = False):
-        self._json_uploader = JSONProductUploader(isuri, database, collection, debug, filename)
+    def __init__(self, isuri: str, database: str, collection: str):
+        self._json_uploader = JSONProductUploader(isuri, database, collection)
         self._isuri = isuri
-        self._filename = filename
-        self._debug = debug
 
-    async def push_changes(self, query_filter_name: str=ProductUploader.DEFAULT_QUERY_FILTER):
+    async def push_changes(self, filename: str, query_filter_name: str=ProductUploader.DEFAULT_QUERY_FILTER):
         pass
 
-    def get_products(self):
-        workbook = self._json_to_workbook()
-        workbook.save(filename=self.DEFAULT_FILENAME_SPREADSHEET)
-        print(f"Spreadsheet saved as {self.DEFAULT_FILENAME_SPREADSHEET}")
+    async def get_products(self):
+        return await self._json_uploader.get_products()
 
-    def _json_to_workbook(self) -> Workbook:
-        ''' Convert all dictionaries from the json file to
-        a workbook.'''
+    async def write_file(self, products: dict, filename: str):
+        workbook = await self._json_to_workbook(products)
+        workbook.save(filename)
+
+    async def _json_to_workbook(self, products: dict) -> Workbook:
+        ''' Convert all dictionaries from json to
+        a workbook.
+
+        Returns a workbook with a formatted sheet'''
         workbook = Workbook()
         sheet = workbook.active
 
@@ -64,9 +67,8 @@ class SpreadsheetProductUploader(ProductUploader):
 
         # Append new products to the sheet
         curr_row = 2
-        products_dict = self._get_products_json()
 
-        for _, product in products_dict.items():
+        for _, product in products.items():
             for key, val in self._denest_dict(product).items():
                 if isinstance(val, str):
                     column = ProductMapping.get(key).value
@@ -126,27 +128,23 @@ class SpreadsheetProductUploader(ProductUploader):
             [denested_dict.update(self._denest_dict(d)) for d in dicts_found]
             return denested_dict
             
-    def _get_products_json(self) -> dict:
-        ''' Read from the json file and return
-        all products in a dictionary.'''
-        with open(self._filename, "r") as rfile:
-            data_dict = json.load(rfile)
-            return data_dict
-
 class JSONProductUploader(ProductUploader):
     ''' Allow client to write changes to a json file
-    and have those changes pushed to the item server.'''
+    and have those changes pushed to the item server.
+
+    Returns the amount of items pushed.'''
 
     DEFAULT_OUTPUT_FILENAME = "products.json"
     DEFAULT_INDENT = 4
-    def __init__(self, isuri: str, database: str, collection: str, debug: bool=False, filename: str=DEFAULT_OUTPUT_FILENAME):
-        ProductUploader.__init__(self, isuri, database, collection, filename, debug)
+    def __init__(self, isuri: str, database: str, collection: str):
+        ProductUploader.__init__(self, isuri, database, collection)
 
-    async def push_changes(self, query_filter_name: str=ProductUploader.DEFAULT_QUERY_FILTER):
+    async def push_changes(self, filename:str, query_filter_name: str=ProductUploader.DEFAULT_QUERY_FILTER) -> int:
+        assert isinstance(filename, str)
         assert isinstance(query_filter_name, str)
         assert query_filter_name != ""
 
-        with open(self._filename, "r") as rfile:
+        with open(filename, "r") as rfile:
             data_dict = json.load(rfile)
             doc_pairs = []
 
@@ -156,11 +154,8 @@ class JSONProductUploader(ProductUploader):
                 data_to_push = item
                 doc_pairs.append((query_filter, data_to_push, self.UPSERT))
 
-            if self._debug:
-                print(f"Pushing {len(doc_pairs)} products to {self._database}.{self._collection}...")
-
             await self._client.bulk_replace(doc_pairs)
-            print(f"Success!")
+            return len(doc_pairs)
 
     async def get_products(self):
         product_json = {}
@@ -170,13 +165,10 @@ class JSONProductUploader(ProductUploader):
             assert isinstance(item, dict)
             product_json[item["_id"]] = item
 
-        if self._debug:
-            print(f"Got {len(product_json)} product(s)!")
-        
-        with open(self._filename, "w") as wfile:
-            json.dump(product_json, wfile, indent=self.DEFAULT_INDENT)
+        return product_json
 
-            if self._debug:
-                print(f"Dumped json to {self._filename}")
-
-uploader.get_products()
+    async def write_file(self, products: dict, filename: str):
+        assert isinstance(products, dict)
+        assert isinstance(filename, str)
+        with open(filename, "w") as wfile:
+            json.dump(products, wfile, indent=self.DEFAULT_INDENT)

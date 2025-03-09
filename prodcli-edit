@@ -1,0 +1,93 @@
+#! /opt/homebrew/bin/python3.11
+# Change the path to match your python location
+from ProductUploader import JSONProductUploader, SpreadsheetProductUploader
+import asyncio
+import argparse
+async def main():
+    parser = argparse.ArgumentParser(description='''
+    Basic script to allow manual editting of product data
+    from the given database and collection.
+
+    Use argument --get to request a snapshot of the collection and
+    save it into the supplied --file, by default "products.json".
+    
+    Use argument --push to push all changes from the snapshot
+    to the remote database server instance.''')
+    parser.add_argument("-isuri", "--item-server-uri", action="store", dest="item_server_uri", required=True, type=str)
+    parser.add_argument("-d", "--debug", action="store_false", dest="debug")
+    parser.add_argument("-f", "--file", action="store", dest="filename")
+    parser.add_argument("-db", "--database", action="store", dest="database", required=True, type=str)
+    parser.add_argument("-col", "--collection", action="store", dest="collection", required=True, type=str)
+
+    # push changes
+    mxg_a = parser.add_argument_group()
+    mxg_a.add_argument("--push", action="store_true", dest="push")
+    mxg_a.add_argument("-qfn", "--query-filter-name", action="store", dest="query_filter_name", default=JSONProductUploader.DEFAULT_QUERY_FILTER)
+
+    # Get products
+    mxg_b = parser.add_argument_group()
+    mxg_b.add_argument("--get", action="store_true", dest="get")
+
+    # check whether json or spreadsheet
+    # interface is to be used
+    parser.add_argument("--json", action="store_true", dest="json")
+    parser.add_argument("--spreadsheet", action="store_true", dest="spreadsheet")
+
+    # Parse args and verify that only one
+    # version of the program is desired (upload XOR get products).
+    args = parser.parse_args()
+    item_server_uri = args.item_server_uri
+    database = args.database
+    collection = args.collection
+    debug = args.debug
+    filename = args.filename
+    push = args.push
+    query_filter_name = args.query_filter_name
+    get = args.get
+
+    json_chosen = args.json
+    spreadsheet_chosen = args.spreadsheet
+
+    push_chosen = push
+    get_chosen = get
+
+    # Push and get are inverse operations.
+    if push_chosen and get_chosen:
+        raise parser.error("Cannot simulatenously get products and push!")
+
+    elif not push_chosen and not get_chosen:
+        raise parser.error("push or get must be provided!")
+
+    # Only one product interface may be used:
+    # spreadsheet or json.
+    if json_chosen and spreadsheet_chosen:
+        raise parser.error("No more than 1 file interface may be chosen!")
+
+    elif not json_chosen and not spreadsheet_chosen:
+        raise parser.error("A file interface must be chosen!")
+
+    # The default filenames vary between JSON and spreadsheet.
+    # Make sure either one is set if the filename
+    # isn't initially provided.
+    if not filename:
+        filename = SpreadsheetProductUploader.DEFAULT_OUTPUT_FILENAME if spreadsheet_chosen \
+                    else JSONProductUploader.DEFAULT_OUTPUT_FILENAME
+
+    # All arguments provided are validated!
+    # Start program.
+    selected_uploader = SpreadsheetProductUploader if spreadsheet_chosen \
+                        else JSONProductUploader
+    product_interface = selected_uploader(item_server_uri, database, collection)
+
+    if push_chosen:
+        print(f"Pushing products to {database}.{collection}...") if debug else None
+        products_pushed = await product_interface.push_changes(filename, query_filter_name)
+        print(f"Pushed {products_pushed} products to {database}.{collection}!") if debug else None
+
+    elif get_chosen:
+        products_dict = await product_interface.get_products()
+        print(f"Got {len(products_dict)} product(s)!") if debug else None
+        await product_interface.write_file(products_dict, filename)
+        print(f"Dumped products to {filename}") if debug else None
+
+asyncio.run(main())
