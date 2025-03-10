@@ -4,6 +4,51 @@ GROCERY_NAME = "grocery"
 HOME_BEAUTY_BABY_NAME = "home-beauty-baby"
 JF_NAME = "joe-fresh"
 
+class Product:
+    def __init__(self):
+        self._id: str
+        self.product_title: str
+        self.product_brand: str
+        self.product_url: str
+        self.product_id: str
+        self.product_package_size: str
+        self.price_descriptor: str
+        self.regular_price: str
+        self.sale_price: str
+        self.mop_price: str
+        self.non_member_price: str
+        self.before_price: str
+        self.ean: str
+        self.plu: str
+        self.upc: str
+
+    def as_dict(self):
+        temp = dict()
+        price_data = dict()
+        code_data = dict()
+
+        for field, value in self.__dict__.items():
+            # Group price data
+            if field == "regular_price" or \
+                field == "sale_price" or \
+                field == "mop_price" or \
+                field == "non_member_price" or \
+                field == "before_price":
+                price_data[field] = value
+
+            # Group code data
+            elif field == "ean" or \
+                field == "plu" or \
+                field == "upc":
+                code_data[field] = value
+
+            else:
+                temp[field] = value
+
+        temp["prices"] = price_data
+        temp["codes"] = code_data
+        return temp
+
 class Department(Enum):
     GROCERY_NAME = "grocery"
     HOME_BEAUTY_BABY_NAME = "home-beauty-baby"

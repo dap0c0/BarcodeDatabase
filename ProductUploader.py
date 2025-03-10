@@ -1,8 +1,8 @@
 from MongoClient import MongoClientAsync
 from abc import ABC, abstractmethod
 import json
-from openpyxl import Workbook
-from Globals import ProductMapping
+from openpyxl import Workbook, load_workbook
+from Globals import ProductMapping, Product
 from string import ascii_uppercase
 
 class ProductUploader(ABC):
@@ -16,17 +16,49 @@ class ProductUploader(ABC):
         self._client.select_collection(database, collection)
 
     @abstractmethod
-    async def push_changes(self, query_filter_name: str) -> int:
-        pass
-
-    @abstractmethod
-    async def get_products(self):
+    async def push_changes(self, filename: str, query_filter_name: str) -> int:
         pass
 
     @abstractmethod
     def write_file(self, products: dict, filename: str):
         pass
 
+    async def get_products(self) -> dict:
+        ''' Get all products in a dictionary, each tabled
+        by _id.'''
+        product_json = {}
+        cursor = await self._client.find({})
+
+        async for item in cursor:
+            assert isinstance(item, dict)
+            product_json[item["_id"]] = item
+
+        return product_json
+
+    async def _push_dict(self, data_dict: dict, query_filter_name: str) -> int:
+        ''' Replace all data in the previously selected
+        database and collection with the given dictionary.
+
+        data_dict: dictionary containing all data to replace,
+                    indexed by _id.
+
+        query_filter_name: the filter to apply when searching for the product
+                            to replace.
+
+        Returns: the amount of products replaced.'''
+        assert isinstance(data_dict, dict)
+        assert isinstance(query_filter_name, str)
+        doc_pairs = []
+
+        for _, item in data_dict.items():
+            assert isinstance(item, dict), f"{item} is not a dict!"
+            query_filter = {query_filter_name: item[query_filter_name]}
+            data_to_push = item
+            doc_pairs.append((query_filter, data_to_push, self.UPSERT))
+
+        await self._client.bulk_replace(doc_pairs)
+        return len(doc_pairs)
+    
 class SpreadsheetProductUploader(ProductUploader):
     ''' Allow client to write changes to a spreadsheet
     and have those changes pushed to the item server.
@@ -36,16 +68,20 @@ class SpreadsheetProductUploader(ProductUploader):
     into json before uploading.
     '''
     DEFAULT_OUTPUT_FILENAME = "products.xlsx"
-
-    def __init__(self, isuri: str, database: str, collection: str):
-        self._json_uploader = JSONProductUploader(isuri, database, collection)
-        self._isuri = isuri
-
     async def push_changes(self, filename: str, query_filter_name: str=ProductUploader.DEFAULT_QUERY_FILTER):
-        pass
+        ''' Push changes from the supplied filename
+        onto database.collection.
 
-    async def get_products(self):
-        return await self._json_uploader.get_products()
+        filename: name of the spreadsheet file
+
+        query_filter_name: filter to apply when searching
+                            for products to replace
+        
+        returns: the amount of products replaced.
+        '''
+        workbook = load_workbook(filename=filename)
+        products_dict = self._workbook_to_dict(workbook)
+        return await self._push_dict(products_dict, query_filter_name)
 
     async def write_file(self, products: dict, filename: str):
         workbook = await self._json_to_workbook(products)
@@ -79,6 +115,37 @@ class SpreadsheetProductUploader(ProductUploader):
 
     def _workbook_to_dict(self, workbook: Workbook) -> dict:
         assert isinstance(workbook, Workbook)
+        ''' Convert the workbook's sheet of products
+        into the corresponding product dictionary.'''
+        sheet = workbook.active
+
+        # Verify that the header row is correctly formatted.
+        if self._verify_header_row(tuple([cell.value for cell in sheet[1]])):
+            products_dict = {}
+
+            # Get all products from each row
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                prod = Product()
+                
+                for i, val in enumerate(row):
+                    prod.__dict__[ProductMapping.get(i + 1).name] = val if val else ""
+        
+                products_dict[prod._id] = prod.as_dict()
+            return products_dict
+        return None
+
+    def _verify_header_row(self, row: tuple):
+        if len(row) != len(ProductMapping):
+            return False
+
+        for i, field in enumerate(row):
+            try:
+                if i != ProductMapping.get(field).value - 1:
+                    return False
+
+            except KeyError:
+                return False
+        return True
 
     def _int_to_alpha(self, val: int) -> str:
         ''' Convert the integer value to its respective
@@ -139,36 +206,19 @@ class JSONProductUploader(ProductUploader):
     def __init__(self, isuri: str, database: str, collection: str):
         ProductUploader.__init__(self, isuri, database, collection)
 
-    async def push_changes(self, filename:str, query_filter_name: str=ProductUploader.DEFAULT_QUERY_FILTER) -> int:
+    async def push_changes(self, filename: str, query_filter_name: str=ProductUploader.DEFAULT_QUERY_FILTER) -> int:
         assert isinstance(filename, str)
         assert isinstance(query_filter_name, str)
         assert query_filter_name != ""
 
         with open(filename, "r") as rfile:
             data_dict = json.load(rfile)
-            doc_pairs = []
-
-            for _, item in data_dict.items():
-                assert isinstance(item, dict), f"{item} is not a dict!"
-                query_filter = {query_filter_name: item[query_filter_name]}
-                data_to_push = item
-                doc_pairs.append((query_filter, data_to_push, self.UPSERT))
-
-            await self._client.bulk_replace(doc_pairs)
-            return len(doc_pairs)
-
-    async def get_products(self):
-        product_json = {}
-        cursor = await self._client.find({})
-
-        async for item in cursor:
-            assert isinstance(item, dict)
-            product_json[item["_id"]] = item
-
-        return product_json
+            products_replaced = await self._push_dict(data_dict, query_filter_name)
+            return products_replaced
 
     async def write_file(self, products: dict, filename: str):
         assert isinstance(products, dict)
         assert isinstance(filename, str)
         with open(filename, "w") as wfile:
             json.dump(products, wfile, indent=self.DEFAULT_INDENT)
+
