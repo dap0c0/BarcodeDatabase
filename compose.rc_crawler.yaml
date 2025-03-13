@@ -1,15 +1,35 @@
-# Comments are provided throughout this file to help you get started.
-# If you need more help, visit the Docker Compose reference guide at
-# https://docs.docker.com/go/compose-spec-reference/
-
-# Here the instructions define your application as a service called "server".
-# This service is built from the Dockerfile in the current directory.
-# You can add other services your application may depend on here, such as a
-# database or a cache. For examples, see the Awesome Compose repository:
-# https://github.com/docker/awesome-compose
+# Note: I did not know how to mount a secret during build via the
+# Dockerfile. Thus, it wasn't possible to set an entrypoint with the
+# isuri such that we could add arguments in the cmdline interface.
+# As a workaround, I've set two distinct services in this compose file:
+# rc_crawler (scrape using the leaves in leaves/leaves.json) and
+# leaf_extractor (scrape for leaves and set in leaves/leaves.json).
 services:
   rc_crawler:
     build:
       context: .
       dockerfile: ./Docker/rc_crawler/Dockerfile
     image: rc-crawler-image:latest
+    secrets:
+      # Mount the contents of the secret file
+      # from the current working directory
+      # to the secret volume.
+      - item_server_url
+    command: sh -c "python3.11 page_it -isuri $(cat /run/secrets/item_server_url)"
+
+  leaf_extractor:
+    build:
+      context: .
+      dockerfile: ./Docker/rc_crawler/Dockerfile
+    image: rc-crawler-image:latest
+    secrets:
+      # Mount the contents of the secret file
+      # from the current working directory
+      # to the secret volume.
+      - item_server_url
+    command: sh -c "python3.11 page_it -isuri $(cat /run/secrets/item_server_url) --grocery --home-beauty-baby --joe-fresh"
+
+# Secret volumes
+secrets:
+  item_server_url:
+    file: item_server_url.txt
