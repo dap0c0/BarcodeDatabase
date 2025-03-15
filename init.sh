@@ -24,7 +24,7 @@ CRAWLER_SERVICE=rc_crawler
 LEAF_EXTRACTOR_SERVICE=leaf_extractor
 
 # Leaf extraction vars
-# By default, crawl on Sunday, 1:00 am
+# By default, crawl on Sunday, 12:00 am
 # every week.
 LEAF_EXTRACTION_DAY=0
 LEAF_EXTRACTION_START_HOUR=0
@@ -39,7 +39,7 @@ FRONTEND_START_MINUTE=45
 
 # By default, end the frontend server
 # at 10:30 pm.
-FRONTEND_STOP_HOUR=21
+FRONTEND_STOP_HOUR=22
 FRONTEND_STOP_MINUTE=30
 
 # Set timezone

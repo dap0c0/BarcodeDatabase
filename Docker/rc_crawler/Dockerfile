@@ -56,6 +56,3 @@ USER appuser
 
 # Copy the source code into the container.
 COPY . .
-
-# Run the crawler when the container starts
-ENTRYPOINT ["python3.11", "page_it"]
