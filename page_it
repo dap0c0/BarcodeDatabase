@@ -1,4 +1,5 @@
 #! /opt/homebrew/bin/python3.11
+from Globals import Secrets
 from pymongo.errors import ServerSelectionTimeoutError
 from playwright.async_api import async_playwright
 from RealCanadianPageIterator import RealCanadianPageIteratorAsyncDiv
@@ -15,7 +16,7 @@ if __name__ == "__main__":
     # url from the cmd line.
     parser = argparse.ArgumentParser(description="Basic iterative webscraper for the Real" + \
                                     "Canadian Superstore website")
-    parser.add_argument("--item-server-uri", "-isuri", action="store", dest="isuri", type=str, required=True)
+    parser.add_argument("-isuri", "--item-server-uri", action="store", dest="isuri", default=Secrets.get_isuri(), type=str)
     parser.add_argument("-s", "--seed", action="store", dest="seed", type=str, default=FOOD_PAGE_URL)
     parser.add_argument("-w", "--workers", action="store", dest="workers", type=int, default=DEFAULT_WORKERS)
     

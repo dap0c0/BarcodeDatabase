@@ -1,8 +1,10 @@
 #! /opt/homebrew/bin/python3.11
 # Change the path to match your python location
 from ProductUploader import JSONProductUploader, SpreadsheetProductUploader
+from Globals import Secrets
 import asyncio
 import argparse
+
 async def main():
     parser = argparse.ArgumentParser(description='''
     Basic script to allow manual editting of product data
@@ -13,7 +15,7 @@ async def main():
     
     Use argument --push to push all changes from the snapshot
     to the remote database server instance.''')
-    parser.add_argument("-isuri", "--item-server-uri", action="store", dest="item_server_uri", required=True, type=str)
+    parser.add_argument("-isuri", "--item-server-uri", action="store", dest="isuri", default=Secrets.get_isuri(), type=str)
     parser.add_argument("-d", "--debug", action="store_false", dest="debug")
     parser.add_argument("-f", "--file", action="store", dest="filename")
     parser.add_argument("-db", "--database", action="store", dest="database", required=True, type=str)
@@ -36,7 +38,7 @@ async def main():
     # Parse args and verify that only one
     # version of the program is desired (upload XOR get products).
     args = parser.parse_args()
-    item_server_uri = args.item_server_uri
+    isuri = args.isuri
     database = args.database
     collection = args.collection
     debug = args.debug
@@ -77,7 +79,7 @@ async def main():
     # Start program.
     selected_uploader = SpreadsheetProductUploader if spreadsheet_chosen \
                         else JSONProductUploader
-    product_interface = selected_uploader(item_server_uri, database, collection)
+    product_interface = selected_uploader(isuri, database, collection)
 
     if push_chosen:
         print(f"Pushing products to {database}.{collection}...") if debug else None

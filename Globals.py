@@ -81,6 +81,14 @@ class ProductMapping(Enum):
         elif isinstance(x, int):
             return ProductMapping.__dict__["_value2member_map_"][x]
 
+class Secrets(Enum):
+    CF_TOKEN_FILE="cf_tunnel_token.txt"
+    ISURI_FILE="item_server_url.txt"
+
+    def get_isuri():
+        with open(Secrets.ISURI_FILE.value, "r") as rfile:
+            return rfile.read().strip()
+
 # TODO: remove this! will be deprecated after
 # reformatting code with DateFormatter
 TIME_FORMAT = "%Y-%m-%d"
