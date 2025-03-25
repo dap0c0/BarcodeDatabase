@@ -1,5 +1,5 @@
-# Verify that the script is run
 # as root
+# Verify that the script is run
 # if (($EUID != 0)); then
 # echo "Please run this script as root!"
 # exit
@@ -51,19 +51,19 @@ timedatectl set-timezone $TIMEZONE
 # and append our scheduled tasks to it
 touch $CRONFILE_NAME
 
-# Backend crawl. Perform
-# for the predesignated amount of times
+# Backend leaf extraction
 echo "Instructing crontab to initiate crawl $NUM_CRAWLS_PER_DAY times per day" \
   "starting at $CRAWL_START_HOUR:$CRAWL_START_MINUTE"
 echo "$CRAWL_START_MINUTE $CRAWL_START_HOUR * * *" \
-  "$DOCKER_PATH compose -f $PROJECT_PATH/$CRAWLER_COMPOSE_FILE run $CRAWLER_SERVICE" >$CRONFILE_NAME
+  "$DOCKER_PATH compose -f $PROJECT_PATH/$CRAWLER_COMPOSE_FILE run $LEAF_EXTRACTOR_SERVICE" >$CRONFILE_NAME
 
-# Backend leaf extraction
+# Backend crawl. Perform
+# for the predesignated amount of times
 echo "Instructing crontab to extract leaves on day $LEAF_EXTRACTION_DAY" \
   "starting at $LEAF_EXTRACTION_START_HOUR:$LEAF_EXTRACTION_START_MINUTE"
 echo "$LEAF_EXTRACTION_START_MINUTE $LEAF_EXTRACTION_START_HOUR * * $LEAF_EXTRACTION_DAY" \
   "$BASH_PATH -c \"for i in {1..$NUM_CRAWLS_PER_DAY}:; do" \
-  "$DOCKER_PATH compose -f $PROJECT_PATH/$CRAWLER_COMPOSE_FILE run $LEAF_EXTRACTOR_SERVICE; done\"" >>$CRONFILE_NAME
+  "$DOCKER_PATH compose -f $PROJECT_PATH/$CRAWLER_COMPOSE_FILE run $CRAWLER_SERVICE; done\"" >>$CRONFILE_NAME
 
 # Daemonize the frontend server
 # at designated time

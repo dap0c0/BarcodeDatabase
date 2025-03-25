@@ -14,7 +14,9 @@ import playwright._impl._errors
 
 class RealCanadianPageIterator(ABC):
     NO_GRID_MESSAGE = "No items are available."
-    DEFAULT_FILE_PATH = "leaves/leaves.json"
+    DEFAULT_LEAVES_FILENAME = "leaves.json"
+    DEFAULT_LEAVES_DIR = "leaves"
+    DEFAULT_FILE_PATH = "/".join([DEFAULT_LEAVES_DIR, DEFAULT_LEAVES_FILENAME])
     DEFAULT_INDENT = 4
     DEFAULT_TIMEOUT_SELECTORS = 30000
     DEFAULT_TIMEOUT_NAVIGATION = 30000
@@ -305,8 +307,9 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
 
             # Cache all leaves into the file
             # to make crawling easier in the future.
-            if not os.path.exists(self.DEFAULT_FILE_PATH):
-                os.makedirs(os.path.dirname(self.DEFAULT_FILE_PATH))
+            # Make sure that it exists!
+            if not os.path.exists(self.DEFAULT_LEAVES_DIR):
+                os.makedirs(os.path.dirname(self.DEFAULT_LEAVES_DIR))
 
             with open(self._leafs_filepath, "w") as wfile:
                 wfile.write(json.dumps(leafs_dict, indent=self.DEFAULT_INDENT))
