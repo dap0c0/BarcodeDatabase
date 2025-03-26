@@ -82,7 +82,7 @@ class DBMaintainer():
             else:
                 print(f"{db}.{curr_date_str} doesn't exist! Skipping.")
 
-    async def sync_codes(self, db: str, dest_col: str, accumulate_col: str, upsert: bool=True):
+    async def sync_codes(self, db: str, dest_col: str, accumulate_col: str, upsert: bool=False):
         ''' Synchronize codes from db.accumulate_col into db.dest_col.
 
         db: the selected department

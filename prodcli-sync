@@ -53,7 +53,7 @@ async def main():
     for dep in deps:
         print(f"#---- Current department: {dep} ----#")
         try:
-            await db_maintainer.sync_codes(dep, args.dest_col, args.src, upsert=True)
+            await db_maintainer.sync_codes(dep, args.dest_col, args.src, upsert=False)
 
         except Exception as e:
             print(f"Exception of {e.__class__} raised. Skipping...")
