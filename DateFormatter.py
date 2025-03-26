@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 class InvalidFormatError(KeyError):
     pass
 
@@ -60,6 +60,22 @@ class DateFormatter():
 
         dt: datetime object'''
         return dt.strftime(self._date_format)
+
+    def date_offset_today(self, offset: int) -> str:
+        ''' Get the string of the date that's offsetted
+            from today.
+
+            E.g., suppose that today was Mar. 26, 2025.
+            If offset = 0, return 2025-03-26.
+            If offset = -1, return 2025-03-25.
+            If offset = 5, return 2025-03-31.
+
+            offset: integer offset representing days.
+                    Can be negative or positive.
+
+            returns: string representing the date, formatted.'''
+        assert isinstance(offset, int)
+        return self.get_date_str(datetime.today() + timedelta(offset))
 
     def _verify_delimiter(self, delimiter):
         if not isinstance(delimiter, str):

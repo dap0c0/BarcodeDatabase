@@ -9,7 +9,8 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 from MongoClient import MongoClientAsync, CollectionNotFound
 from playwright.async_api import async_playwright
-from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME, today
+from DateFormatter import DateFormatter
+from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
 import playwright._impl._errors
 
 class RealCanadianPageIterator(ABC):
@@ -49,6 +50,7 @@ class RealCanadianPageIterator(ABC):
         self._latitude_longitude = latitude_longitude
         self._permissions = permissions
         self._store_location = store_location
+        self._df = DateFormatter()
 
     @abstractmethod
     def scrape(self,
@@ -324,12 +326,6 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # each product to the database.
         await self._scrape_products(leafs_dict, workers)
 
-    # Referenced from Kasravnd in
-    # https://stackoverflow.com/questions/30483977/python-get-yesterdays-date-as-a-string-in-yyyy-mm-dd-format
-    def _yesterday(self) -> str:
-        yesterday = datetime.now() - timedelta(1)
-        return yesterday.strftime("%Y-%m-%d")
-
     async def _migrate_codes(self,
                             db_src: str,
                             col_src: str,
@@ -382,8 +378,8 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # database (the department) and the collection (thecurrent date).
         # For example, A Joe Fresh leaf iterated on Jan 25, 2025 will have documents
         # uploaded to joe-fresh/2025-01-5.
-        todays_date = today()
-        yesterday = self._yesterday()
+        todays_date = self._df.date_offset_today(0)
+        yesterday = self._df.date_offset_today(-1)
 
         for department in leafs_dict:
             leafs = leafs_dict[department]

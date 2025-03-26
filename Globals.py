@@ -1,4 +1,3 @@
-import time
 from enum import Enum
 GROCERY_NAME = "grocery"
 HOME_BEAUTY_BABY_NAME = "home-beauty-baby"
@@ -88,11 +87,3 @@ class Secrets(Enum):
     def get_isuri():
         with open(Secrets.ISURI_FILE.value, "r") as rfile:
             return rfile.read().strip()
-
-# TODO: remove this! will be deprecated after
-# reformatting code with DateFormatter
-TIME_FORMAT = "%Y-%m-%d"
-
-# TODO: Remove this!
-def today():
-    return time.strftime(TIME_FORMAT)
