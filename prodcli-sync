@@ -1,12 +1,14 @@
 #! /opt/homebrew/bin/python3.11
 # Change the path to match your python location
 from DBMaintainer import DBMaintainer
+from DateFormatter import DateFormatter
 from Globals import Department, Secrets
 import sys
 import asyncio
 import argparse
 
 async def main():
+    df = DateFormatter()
     parser = argparse.ArgumentParser(description='''
     Basic code migration script that
     synchronizes the destination column
@@ -14,9 +16,8 @@ async def main():
     interval of [start-date, end-date].''')
     parser.add_argument("-isuri", "--item-server-uri", action="store", dest="isuri", default=Secrets.get_isuri(), type=str)
     parser.add_argument("-dbs", "--databases", action="append", nargs="+", dest="databases", required=True, type=str)
-    parser.add_argument("-s", "--start-date", action="store", dest="start_date", required=True, type=str)
-    parser.add_argument("-e", "--end-date", action="store", dest="end_date", required=True, type=str)
-    parser.add_argument("-dc", "--dest-col", action="store", dest="dest_col", type=str, required=True)
+    parser.add_argument("-dc", "--dest-col", action="store", dest="dest_col", default=df.date_offset_today(0))
+    parser.add_argument("-s", "--src", action="store", dest="src", default=DBMaintainer.DEFAULT_ACCUMULATE_COL)
     parser.add_argument("-i", dest="interactive", action="store_true")
     args = parser.parse_args()
     db_maintainer = DBMaintainer(args.isuri, args.interactive)
@@ -27,7 +28,8 @@ async def main():
     # is not a static, accumulate collection! The accumulate collection is
     # meant to store non-stateful data, whereas dynamic collections
     # like "2025-02-28" are meant to store such data like
-    # product_package_size, price, price_descriptor.
+    # product_package_size, price, price_descriptor, which
+    # changes often.
     if not db_maintainer.is_date_col(args.dest_col):
         print(f"'{args.dest_col}' should not be selected as a destination collection!")
         sys.exit()
@@ -45,12 +47,16 @@ async def main():
             print(f"The department '{dep}' is invalid!\nPlease choose from {existing_deps}", file=sys.stderr)
             sys.exit()
 
-    # Every department is valid!
-    # Now, update every collection in
-    # the established range for each dep.
+    # Every department is valid! Now, synchronize
+    # the dest_col for every department, using
+    # the source collection.
     for dep in deps:
         print(f"#---- Current department: {dep} ----#")
-        await db_maintainer.aggregrate_codes(dep, args.start_date, args.end_date, args.dest_col, upsert=False)
+        try:
+            await db_maintainer.sync_codes(dep, args.dest_col, args.src, upsert=True)
+
+        except Exception as e:
+            print(f"Exception of {e.__class__} raised. Skipping...")
         print()
     
 asyncio.run(main())
