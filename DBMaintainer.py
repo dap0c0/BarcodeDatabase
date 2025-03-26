@@ -44,6 +44,7 @@ class DateTimeRange():
         return (start_dt - end_dt).days
 
 class DBMaintainer():
+    DEFAULT_ACCUMULATE_COL = "accumulate"
     AGREE_CHARS = ["Y", "y"]
 
     def __init__(self, endpoint_url: str, interactive: bool):
