@@ -1,4 +1,4 @@
-from MongoClient import MongoClientAsync, CollectionNotFound
+from MongoClient import MongoClientAsync, CollectionNotFound, DatabaseInvalid
 from DateFormatter import DateFormatter, InvalidDateFormatStringError
 from datetime import datetime, timedelta
 
@@ -82,7 +82,45 @@ class DBMaintainer():
             else:
                 print(f"{db}.{curr_date_str} doesn't exist! Skipping.")
 
-    async def aggregrate_codes(self, db: str, start_date: str, end_date: str, dest_col: str, upsert: bool) -> int:
+    async def sync_codes(self, db: str, dest_col: str, accumulate_col: str, upsert: bool=True):
+        ''' Synchronize codes from db.accumulate_col into db.dest_col.
+
+        db: the selected department
+        dest_col: collection to synchronize
+        accumulate_col: source of codes to synchronize from
+        upsert: boolean for whether a document should be
+                inserted into the collection if not previously
+                indexed'''
+        assert isinstance(db, str)
+        assert isinstance(dest_col, str)
+        assert isinstance(accumulate_col, str)
+        assert isinstance(upsert, bool)
+        if not await self._client.check_exists_db(db):
+            raise DatabaseInvalid(f"The database {db} doesn't exist!")
+
+        if not await self._client.check_exists_col(db, dest_col):
+            raise CollectionNotFound(f"The collection {db}.{dest_col} doesn't exist.")
+
+        if not await self._client.check_exists_col(db, accumulate_col):
+            raise CollectionNotFound(f"The collection {db}.{accumulate_col} doesn't exist.")
+        
+        # This boolean can potentially be negated
+        # by the user if the script is set to interactive.
+        proceed = True
+
+        if self._interactive:
+            message = f"Do you wish to synchronize from {db}.{accumulate_col}\n" +\
+                f"to {db}.{dest_col}? (y/n): "
+            proceed = self._prompt_action(message)
+
+        if proceed:
+            print(f"Synchronizing codes from {db}.{accumulate_col} to {db}.{dest_col}")
+            extra_fields = ["product_title", "product_brand", "product_url", "product_id"]
+
+            await self._migrate_codes(extra_fields, db,
+                                        accumulate_col, db, dest_col, upsert=upsert)
+
+    async def aggregrate_codes(self, db: str, start_date: str, end_date: str, dest_col: str, upsert: bool):
         ''' For <db> from <start_date> (incl.) to <end_date> (incl.),
         aggregrate all code data (upc, ean, plu) to <dest_col>.
         Disregard all price data of all products.
@@ -92,9 +130,7 @@ class DBMaintainer():
         db: string representing department to aggregrate code data
         start_date: date string defining collection boundary
         end_date: date string defining collection boundary
-        dest_col: string defining destination of all aggregrated data
-
-        returns: the amount of unique products added to <dest_col>'''
+        dest_col: string defining destination of all aggregrated data'''
         assert isinstance(db, str)
         assert isinstance(start_date, str)
         assert isinstance(end_date, str)
@@ -154,19 +190,24 @@ class DBMaintainer():
         # from the source collection
         self._client.select_collection(db_src, col_src)
         code_cursor = await self._client.find({
-            "codes": {
-                "$ne": {
-                    "upc": "",
-                    "ean": "",
-                    "plu": ""
-                }
-            }
+            "$or": [
+                {"codes.upc": {"$ne": "" } },
+                {"codes.ean": {"$ne": "" } },
+                {"codes.plu": {"$ne": "" } },
+            ]
         })
         updates = []
 
         async for doc in code_cursor:
             to_set = {"codes": doc["codes"]}
-            
+            code_found = False
+
+            for _, val in to_set["codes"].items():
+                if val != "":
+                    code_found = True
+
+            assert code_found
+
             try:
                 to_set.update({field: doc[field] for field in extra_fields})
 
