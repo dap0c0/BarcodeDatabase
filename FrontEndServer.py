@@ -13,7 +13,8 @@ from twisted.web.http import Request
 from twisted.internet.defer import Deferred
 from twisted.python.failure import Failure
 from twisted.internet import reactor, endpoints, ssl
-from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME, today
+from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
+from DateFormatter import DateFormatter
 from assets import fonts, colours
 from pymongo.errors import OperationFailure
 from bs4 import BeautifulSoup
@@ -46,6 +47,10 @@ class NoPriceRateExtracted(AssertionError):
     pass
 
 class HTTPResource(Resource, ABC):
+    def __init__(self):
+        Resource.__init__(self)
+        self._df = DateFormatter()
+
     def _generate_link(self, link_text: str, redirect: str, link_class: str=""):
         assert isinstance(link_text, str)
         assert isinstance(redirect, str)
@@ -1030,6 +1035,7 @@ class SearchPage(HTTPResource):
 
     def __init__(self,
                  api_url: str):
+        HTTPResource.__init__(self)
         self._api_url = api_url
         self._db_client = MongoClientSync(api_url)
 
@@ -1043,7 +1049,7 @@ class SearchPage(HTTPResource):
         ]
         for db in valid_databases:
             try:
-                self._db_client.select_collection(db, today())
+                self._db_client.select_collection(db, self._df.date_offset_today(0))
                 self._db_client.create_text_index("$**")
 
             except OperationFailure:
@@ -1132,7 +1138,7 @@ class SearchPage(HTTPResource):
         # Select the department in the database.
         # Always choose the most recent collection (today)
         # per department.
-        todays_date = today()
+        todays_date = self._df.date_offset_today(0)
         self._db_client.select_collection(department, todays_date)
         query_matches = {}
 
@@ -1167,8 +1173,8 @@ class SearchPage(HTTPResource):
             product_listing = [
                 self._generate_link(title, f"https://realcanadiansuperstore.ca{link}", "link"),
                 brand, id, pps]
-            
             product_html = "<div>"
+
             # General info
             for datum in product_listing:
                 if datum == "":
