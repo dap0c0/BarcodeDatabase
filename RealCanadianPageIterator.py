@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 from MongoClient import MongoClientAsync, CollectionNotFound
 from playwright.async_api import async_playwright
-from DateFormatter import DateFormatter
+from DateFormatter import DateFormatterToday
 from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
 import playwright._impl._errors
 
@@ -50,7 +50,7 @@ class RealCanadianPageIterator(ABC):
         self._latitude_longitude = latitude_longitude
         self._permissions = permissions
         self._store_location = store_location
-        self._df = DateFormatter()
+        self._df = DateFormatterToday()
 
     @abstractmethod
     def scrape(self,
@@ -378,8 +378,8 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # database (the department) and the collection (thecurrent date).
         # For example, A Joe Fresh leaf iterated on Jan 25, 2025 will have documents
         # uploaded to joe-fresh/2025-01-5.
-        todays_date = self._df.date_offset_today(0)
-        yesterday = self._df.date_offset_today(-1)
+        todays_date = self._df.date_offset_today_int(0)
+        yesterday = self._df.date_offset_today_int(-1)
 
         for department in leafs_dict:
             leafs = leafs_dict[department]
