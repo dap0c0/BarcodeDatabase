@@ -1,6 +1,7 @@
 #! /opt/homebrew/bin/python3.11
 # Change the path to match your python location
 from DBMaintainer import DBMaintainer
+from DateFormatter import InvalidDateFormatStringError
 from Globals import Department, Secrets
 import sys
 import asyncio
@@ -32,14 +33,32 @@ async def main():
         assert isinstance(dep, str)
         if dep not in existing_deps:
             print(f"The department '{dep}' is invalid!\nPlease choose from {existing_deps}", file=sys.stderr)
-            sys.exit()
+            sys.exit(1)
+
+    # Try to handle the date input for our desired
+    # collection for both start and end. If an invalid date
+    # representation was passed, execution will halt.
+    try:
+        start_date = db_maintainer.handle_date_input(args.start_date)
+
+    except InvalidDateFormatStringError:
+        print(f"The inputted date representation '{args.start_date}' is invalid!", file=sys.stderr)
+        sys.exit(1)
+
+    # Proceed similarly with the end_date
+    try:
+        end_date = db_maintainer.handle_date_input(args.end_date)
+
+    except InvalidDateFormatStringError:
+        print(f"The inputted date representation '{args.end_date}' is invalid!", file=sys.stderr)
+        sys.exit(1)
 
     # Every department is valid!
     # Now, drop every collection in
     # the established range for each dep.
     for dep in deps:
         print(f"#---- Current department: {dep} ----#")
-        await db_maintainer.drop_collections(dep, args.start_date, args.end_date)
+        await db_maintainer.drop_collections(dep, start_date, end_date)
         print()
     
 asyncio.run(main())

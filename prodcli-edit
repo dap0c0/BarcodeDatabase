@@ -1,7 +1,10 @@
 #! /opt/homebrew/bin/python3.11
 # Change the path to match your python location
 from ProductUploader import JSONProductUploader, SpreadsheetProductUploader
+from DateFormatter import DateFormatterToday, InvalidDateFormatStringError
+from DBMaintainer import DBMaintainer
 from Globals import Secrets
+import sys
 import asyncio
 import argparse
 
@@ -74,6 +77,23 @@ async def main():
     if not filename:
         filename = SpreadsheetProductUploader.DEFAULT_OUTPUT_FILENAME if spreadsheet_chosen \
                     else JSONProductUploader.DEFAULT_OUTPUT_FILENAME
+
+    # NOTE: both the DBMaintainer and the
+    # product_interface that's initialized later establish
+    # connections to our remote endpoint. This should be fixed
+    # in a code refactor.
+    db_maintainer = DBMaintainer(isuri, False)
+
+    # Allow the accumulate collection to be editted!
+    # If the accumulate collection isn't selected by the user,
+    # handle date input appropriately.
+    if collection != DBMaintainer.DEFAULT_ACCUMULATE_COL:
+        try:
+            collection = db_maintainer.handle_date_input(collection)
+
+        except InvalidDateFormatStringError:
+            print(f"The inputted date representation '{collection}' is invalid!", file=sys.stderr)
+            sys.exit(1)
 
     # All arguments provided are validated!
     # Start program.

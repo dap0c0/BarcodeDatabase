@@ -1,14 +1,12 @@
 #! /opt/homebrew/bin/python3.11
 # Change the path to match your python location
-from DBMaintainer import DBMaintainer
-from DateFormatter import DateFormatter
+from DBMaintainer import DBMaintainer, InvalidDateFormatStringError
 from Globals import Department, Secrets
 import sys
 import asyncio
 import argparse
 
 async def main():
-    df = DateFormatter()
     parser = argparse.ArgumentParser(description='''
     Basic code migration script that
     synchronizes the destination column
@@ -16,7 +14,7 @@ async def main():
     interval of [start-date, end-date].''')
     parser.add_argument("-isuri", "--item-server-uri", action="store", dest="isuri", default=Secrets.get_isuri(), type=str)
     parser.add_argument("-dbs", "--databases", action="append", nargs="+", dest="databases", required=True, type=str)
-    parser.add_argument("-dc", "--dest-col", action="store", dest="dest_col", default=df.date_offset_today(0))
+    parser.add_argument("-dc", "--dest-col", action="store", dest="dest_col", default="t")
     parser.add_argument("-s", "--src", action="store", dest="src", default=DBMaintainer.DEFAULT_ACCUMULATE_COL)
     parser.add_argument("-i", dest="interactive", action="store_true")
     args = parser.parse_args()
@@ -30,9 +28,9 @@ async def main():
     # like "2025-02-28" are meant to store such data like
     # product_package_size, price, price_descriptor, which
     # changes often.
-    if not db_maintainer.is_date_col(args.dest_col):
+    if args.dest_col == DBMaintainer.DEFAULT_ACCUMULATE_COL:
         print(f"'{args.dest_col}' should not be selected as a destination collection!")
-        sys.exit()
+        sys.exit(1)
 
     # Allow "all" to be supplied to --databases.
     # If it is, iterate through all databases.
@@ -45,7 +43,19 @@ async def main():
         assert isinstance(dep, str)
         if dep not in existing_deps:
             print(f"The department '{dep}' is invalid!\nPlease choose from {existing_deps}", file=sys.stderr)
-            sys.exit()
+            sys.exit(1)
+
+    # Try to handle the date input
+    # for our desired collection for both start and end.
+    # If an invalid date representation was passed, execution
+    # will halt.
+    try:
+        dest_col = db_maintainer.handle_date_input(args.dest_col)
+
+    # Override exception message
+    except InvalidDateFormatStringError:
+        print(f"The inputted date representation '{args.dest_col}' is invalid!", file=sys.stderr)
+        sys.exit(1)
 
     # Every department is valid! Now, synchronize
     # the dest_col for every department, using
@@ -53,7 +63,7 @@ async def main():
     for dep in deps:
         print(f"#---- Current department: {dep} ----#")
         try:
-            await db_maintainer.sync_codes(dep, args.dest_col, args.src, upsert=False)
+            await db_maintainer.sync_codes(dep, dest_col, args.src, upsert=False)
 
         except Exception as e:
             print(f"Exception of {e.__class__} raised. Skipping...")

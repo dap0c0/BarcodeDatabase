@@ -1,6 +1,6 @@
 from MongoClient import MongoClientAsync, CollectionNotFound, DatabaseInvalid
-from DateFormatter import DateFormatter, InvalidDateFormatStringError
-from datetime import datetime, timedelta
+from DateFormatter import DateFormatter, DateFormatterToday, InvalidDateFormatStringError, InvalidFormatError
+from datetime import date, datetime, timedelta
 
 class DateTimeRange():
     def __init__(self, start_date: str, end_date: str):
@@ -52,7 +52,7 @@ class DBMaintainer():
         assert isinstance(interactive, bool)
         self._client = MongoClientAsync(endpoint_url)
         self._interactive = interactive
-        self._df = DateFormatter()
+        self._df = DateFormatterToday()
 
     async def drop_collections(self, db: str, start_date: str, end_date: str):
         ''' Drop every collection from <start_date> (incl.) to
@@ -169,6 +169,29 @@ class DBMaintainer():
 
         except InvalidDateFormatStringError:
             return False
+
+    def handle_date_input(self, string: str):
+        ''' If the string is a correctly formatted date, return.
+        Otherwise, assume that the string is a variant of t or t-n,
+        where -n is an integer representing the day offset from today.
+
+        If the passed string is a variant of t or t-n,
+        return the respective date string.
+
+        If the passed string is neither a correctly formatted date nor
+        a variant of t or t-n, bubble InvalidDateFormatStringError'''
+        assert isinstance(string, str)
+    
+        # Check if the string is a concrete date
+        # like 2025-03-27
+        if self.is_date_col(string):
+            return string
+
+        # The string isn't a concrete date.
+        # Assume that its a variant of t or t-n.
+        # Bubble exception if not a variant.
+        date = self._df.date_offset_today_str(string)
+        return date
 
     async def _migrate_codes(self,
                             extra_fields: list,

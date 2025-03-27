@@ -2,6 +2,7 @@
 # Change the path to match your python location
 from DBMaintainer import DBMaintainer
 from Globals import Department, Secrets
+from DateFormatter import DateFormatterToday, InvalidDateFormatStringError, InvalidFormatError
 import sys
 import asyncio
 import argparse
@@ -31,8 +32,8 @@ async def main():
     # collection would be inconsistent, as some documents would have
     # stateful data and others no.
     if db_maintainer.is_date_col(args.dest_col):
-        print(f"'{args.dest_col}' should not be selected as a destination collection!")
-        sys.exit()
+        print(f"'{args.dest_col}' should not be selected as a destination collection!", file=sys.stderr)
+        sys.exit(1)
 
     # Allow "all" to be supplied to --databases.
     # If it is, iterate through all databases.
@@ -45,7 +46,27 @@ async def main():
         assert isinstance(dep, str)
         if dep not in existing_deps:
             print(f"The department '{dep}' is invalid!\nPlease choose from {existing_deps}", file=sys.stderr)
-            sys.exit()
+            sys.exit(1)
+
+    # Try to handle the date input
+    # for our desired collection for both start and end.
+    # If an invalid date representation was passed, execution
+    # will halt.
+    try:
+        start_date = db_maintainer.handle_date_input(args.start_date)
+
+    # Override exception message (a bit awkward, but whatever hehehe)
+    except InvalidDateFormatStringError:
+        print(f"The inputted date representation '{args.start_date}' is invalid!", file=sys.stderr)
+        sys.exit(1)
+
+    # Proceed similarly with the end_date
+    try:
+        end_date = db_maintainer.handle_date_input(args.end_date)
+
+    except InvalidDateFormatStringError:
+        print(f"The inputted date representation '{args.end_date}' is invalid!", file=sys.stderr)
+        sys.exit(1)
 
     # Every department is valid!
     # Now, migrate the relevant data from every collection in
@@ -53,7 +74,7 @@ async def main():
     # for each department.
     for dep in deps:
         print(f"#---- Current department: {dep} ----#")
-        await db_maintainer.aggregrate_codes(dep, args.start_date, args.end_date, args.dest_col, upsert=True)
+        await db_maintainer.aggregrate_codes(dep, start_date, end_date, args.dest_col, upsert=True)
         print()
     
 asyncio.run(main())

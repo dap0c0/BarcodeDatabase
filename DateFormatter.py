@@ -154,7 +154,7 @@ class DateFormatterToday(DateFormatter):
         matches = self._pe.get_matches(string)
         assert len(matches) == 0 or len(matches) == 1
         if len(matches) == 0:
-            raise InvalidFormatError(f"The inputted string doesn't match! Use a string like " + \
+            raise InvalidDateFormatStringError(f"The inputted string doesn't match! Use a string like " + \
                                      f"{DateFormatterToday.TODAY_CHAR} or " + \
                                     f"{DateFormatterToday.TODAY_CHAR}{DateFormatterToday.OFFSET_CHAR}5")
 
