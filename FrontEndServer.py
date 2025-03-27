@@ -14,7 +14,7 @@ from twisted.internet.defer import Deferred
 from twisted.python.failure import Failure
 from twisted.internet import reactor, endpoints, ssl
 from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
-from DateFormatter import DateFormatter
+from DateFormatter import DateFormatterToday
 from assets import fonts, colours
 from pymongo.errors import OperationFailure
 from bs4 import BeautifulSoup
@@ -49,7 +49,7 @@ class NoPriceRateExtracted(AssertionError):
 class HTTPResource(Resource, ABC):
     def __init__(self):
         Resource.__init__(self)
-        self._df = DateFormatter()
+        self._df = DateFormatterToday()
 
     def _generate_link(self, link_text: str, redirect: str, link_class: str=""):
         assert isinstance(link_text, str)
@@ -1049,7 +1049,7 @@ class SearchPage(HTTPResource):
         ]
         for db in valid_databases:
             try:
-                self._db_client.select_collection(db, self._df.date_offset_today(0))
+                self._db_client.select_collection(db, self._df.date_offset_today_int(0))
                 self._db_client.create_text_index("$**")
 
             except OperationFailure:
@@ -1138,7 +1138,7 @@ class SearchPage(HTTPResource):
         # Select the department in the database.
         # Always choose the most recent collection (today)
         # per department.
-        todays_date = self._df.date_offset_today(0)
+        todays_date = self._df.date_offset_today_int(0)
         self._db_client.select_collection(department, todays_date)
         query_matches = {}
 

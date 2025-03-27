@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta
+from PatternExtractor import PatternExtractor
+
 class InvalidFormatError(KeyError):
     pass
 
@@ -61,22 +63,7 @@ class DateFormatter():
         dt: datetime object'''
         return dt.strftime(self._date_format)
 
-    def date_offset_today(self, offset: int) -> str:
-        ''' Get the string of the date that's offsetted
-            from today.
-
-            E.g., suppose that today was Mar. 26, 2025.
-            If offset = 0, return 2025-03-26.
-            If offset = -1, return 2025-03-25.
-            If offset = 5, return 2025-03-31.
-
-            offset: integer offset representing days.
-                    Can be negative or positive.
-
-            returns: string representing the date, formatted.'''
-        assert isinstance(offset, int)
-        return self.get_date_str(datetime.today() + timedelta(offset))
-
+    
     def _verify_delimiter(self, delimiter):
         if not isinstance(delimiter, str):
             raise InvalidDelimiterError(f"The provided delimiter is of class {delimiter.__class__}, not str!")
@@ -117,3 +104,71 @@ class DateFormatter():
         # Generate string.
         return self._delimiter.join(params)
 
+class DateFormatterToday(DateFormatter):
+    ''' Provides additional formatting functionality
+    in terms of today's date.'''
+    TODAY_CHAR = "t"
+    OFFSET_CHAR = "-"
+    def __init__(self,
+                 format_order: tuple=DateFormatter.DEFAULT_TIME_FORMAT,
+                 delimiter: str=DateFormatter.DEFAULT_DELIMITER):
+        DateFormatter.__init__(self, format_order, delimiter)
+        self._pe = PatternExtractor()
+
+    def date_offset_today_int(self, offset: int) -> str:
+        ''' Get the string of the date that's offsetted
+            from today.
+
+            E.g., suppose that today was Mar. 26, 2025.
+            If offset = 0, return 2025-03-26.
+            If offset = -1, return 2025-03-25.
+            If offset = 5, return 2025-03-31.
+
+            offset: integer offset representing days.
+                    Can be negative or positive.
+
+            returns: string representing the date, formatted.'''
+        assert isinstance(offset, int)
+        return self.get_date_str(datetime.today() + timedelta(offset))
+
+    def date_offset_today_str(self, string: str):
+        '''Given a string like 't', 't-5', or
+        't-0', return the respective date string.
+        E.g., suppose that today was Mar. 27, 2025.
+
+        f('t') -> 2025-03-27
+        f('t-0') -> 2025-03-27
+        f('t-5') -> 2025-03-22'''
+        assert isinstance(string, str)
+
+        # Parse the string with regex.
+        # The following produces ^(?:t|(?:t-\d*))$
+        pattern = fr"^(?:" + \
+                    fr"{DateFormatterToday.TODAY_CHAR}|" + \
+                    fr"(?:{DateFormatterToday.TODAY_CHAR}{DateFormatterToday.OFFSET_CHAR}\d+)" + \
+                    fr")$"
+        self._pe.set_pattern(pattern)
+
+        # Check whether the string matches
+        # our regex
+        matches = self._pe.get_matches(string)
+        assert len(matches) == 0 or len(matches) == 1
+        if len(matches) == 0:
+            raise InvalidFormatError(f"The inputted string doesn't match! Use a string like " + \
+                                     f"{DateFormatterToday.TODAY_CHAR} or " + \
+                                    f"{DateFormatterToday.TODAY_CHAR}{DateFormatterToday.OFFSET_CHAR}5")
+
+        # The string matches our regex!
+        # Proceed with converting it into the respective
+        # date string. Firstly, convert 't' into 't-0'
+        # to simplify processing.
+        matches[0] = f"{DateFormatterToday.TODAY_CHAR}{DateFormatterToday.OFFSET_CHAR}0" if \
+            matches[0] == DateFormatterToday.TODAY_CHAR else matches[0]
+
+        # Get the integer offset following the offset delimiter,
+        # then use it to convert into date string. Note that we only
+        # return previous dates or today, hence we negate offset.
+        offset = int(matches[0].split(DateFormatterToday.OFFSET_CHAR)[1]) * -1
+        assert offset <= 0
+
+        return self.date_offset_today_int(offset)
