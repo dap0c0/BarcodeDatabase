@@ -1,13 +1,16 @@
-sandbox
-__pycache__
-leaves
-page_it.py
-test_search.py
-test_password_db.py
-item_server_url.txt
-cf_tunnel_token.txt
-user-pass
-products.json
-invalid_links.txt
-.DS_STORE
+# Ignore cache directories and files
+**/__pycache__/
+**/.DS_STORE
+**/*.pyc
 
+# Ignore product url data
+**/leaves/
+
+# For security, ignore secret config data used in production
+**/item_server_url.txt
+**/cf_tunnel_token.txt
+
+# After usage of src/prodcli-sync/user_srcipts/prodcli-edit,
+# a products.json or products.xlsx file may be generated.
+# Ignore these data files or any filetype variant.
+**/*.[a-zA-Z]
