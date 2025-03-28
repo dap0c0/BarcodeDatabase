@@ -1,5 +1,5 @@
 from twisted.internet.protocol import Protocol, ClientFactory
-from HTTPResponse import HTTPResponse
+from .HTTPResponse import HTTPResponse
 
 class SimpleHTTP(Protocol):
     HTTP_VERSION = 1.1

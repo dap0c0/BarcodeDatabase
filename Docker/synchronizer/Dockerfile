@@ -44,20 +44,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN ln -fs /usr/share/zoneinfo/America/Chicago /etc/localtime && \
     echo "America/Chicago" > /etc/timezone
 
-# Explicitly install Playwright and the browsers
-RUN pip install playwright
-RUN playwright install --with-deps chromium
-
-# Explicitly install beautiful soup
-RUN pip install beautifulsoup4
-
-# Create the leaves directory
-# where files are only RW
-# TODO: resolve hardcoding of leaves directory
-RUN mkdir -p ./leaves
-RUN chown -R appuser:appuser ./leaves
-RUN chmod 700 ./leaves
-
 # Switch to the non-privileged user to run the application.
 USER appuser
 

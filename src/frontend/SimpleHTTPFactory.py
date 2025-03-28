@@ -1,7 +1,7 @@
 from twisted.internet.protocol import ClientFactory
-from SimpleHTTP import SimpleHTTP
+from .SimpleHTTP import SimpleHTTP
 from twisted.internet import defer
-from HTTPResponse import HTTPResponse
+from .HTTPResponse import HTTPResponse
 
 class SimpleHTTPFactory(ClientFactory):
     COOKIE_HEADER_KEY = "Cookie"

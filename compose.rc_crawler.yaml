@@ -29,6 +29,15 @@ services:
       - item_server_url
     command: sh -c "python3.11 page_it -isuri $(cat /run/secrets/item_server_url) --grocery --home-beauty-baby --joe-fresh"
 
+  synchronizer:
+    build:
+      context: .
+      dockerfile: ./Docker/synchronizer/Dockerfile
+    image: synchronizer-image:latest
+    secrets:
+      -item_server_url
+
+
 # Secret volumes
 secrets:
   item_server_url:

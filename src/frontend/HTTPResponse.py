@@ -1,4 +1,4 @@
-from PatternExtractor import PatternExtractor
+from etc.PatternExtractor import PatternExtractor
 
 class HTTPResponse():
     HTML_DELIMITERS = ["<!doctype html>", "<!DOCTYPE html>"]

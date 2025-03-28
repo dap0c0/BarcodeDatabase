@@ -1,10 +1,12 @@
-from abc import ABC, abstractmethod
-from MongoClient import MongoClientSync
-from HTTPResponse import HTTPResponse
-from SimpleHTTPFactory import SimpleHTTPFactory
-from AuthServer import AuthServerCookie
-from BarcodeGenerator import BarcodeGenerator, UPCBarcodeGenerator
-from PatternExtractor import PatternExtractor
+from .HTTPResponse import HTTPResponse
+from .SimpleHTTPFactory import SimpleHTTPFactory
+from .BarcodeGenerator import UPCBarcodeGenerator
+from .assets import fonts, colours
+from etc.PatternExtractor import PatternExtractor
+from etc.DateFormatter import DateFormatterToday
+from etc.Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
+from abc import ABC
+from backend.backend_interface.MongoClient import MongoClientSync
 from twisted.web.server import Site, NOT_DONE_YET, Session
 from twisted.python.components import registerAdapter
 from zope.interface import Interface, Attribute, implementer
@@ -13,9 +15,6 @@ from twisted.web.http import Request
 from twisted.internet.defer import Deferred
 from twisted.python.failure import Failure
 from twisted.internet import reactor, endpoints, ssl
-from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
-from DateFormatter import DateFormatterToday
-from assets import fonts, colours
 from pymongo.errors import OperationFailure
 from bs4 import BeautifulSoup
 import argparse
@@ -23,13 +22,9 @@ import urllib.parse
 import html
 import base64
 import io
-import json
-import re
 
 HTTP_PORT = 80
 ITEM_SERVER_HTTPS_PORT = 1931
-SESSION_ID_KEY = AuthServerCookie.SESSION_COOKIE_NAME
-AUTH_SERVER_URL = "https://auth_server:3191/test_auth/"
 
 #----- Cookie persistence -------#
 class ICookie(Interface):
@@ -1142,15 +1137,9 @@ class SearchPage(HTTPResource):
         self._db_client.select_collection(department, todays_date)
         query_matches = {}
 
+        # Get all matches for the query.
+        # Sort them by text relevance.
         if search_query != None:
-            headers = {}
-            headers["Connection"] = "close"
-            cookies = {}
-            session_cookie = ICookie(request.getSession()).value
-            cookies[SESSION_ID_KEY] = session_cookie
-
-            # Get all matches for the query.
-            # Sort them by text relevance.
             tokens = search_query.strip().split(" ")
             phrases_str= " ".join([f"\"{t}\"" for t in tokens])
             query = {"$text": {"$search": f'"{phrases_str}"'}}

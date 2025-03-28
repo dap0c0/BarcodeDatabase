@@ -49,9 +49,11 @@ timedatectl set-timezone $TIMEZONE
 
 # Create the cronfile
 # and append our scheduled tasks to it
+echo "Making temporary cronfile..."
 touch $CRONFILE_NAME
 
 # Backend leaf extraction
+# and code synchronization
 echo "Instructing crontab to initiate crawl $NUM_CRAWLS_PER_DAY times per day" \
   "starting at $CRAWL_START_HOUR:$CRAWL_START_MINUTE"
 echo "$CRAWL_START_MINUTE $CRAWL_START_HOUR * * *" \
@@ -83,6 +85,8 @@ echo "$FRONTEND_STOP_MINUTE $FRONTEND_STOP_HOUR * * *" \
 # the current user's crontab
 crontab -l 2>/dev/null | cat - $CRONFILE_NAME | crontab -
 echo "Crontab successfully installed"
+echo "Removing temporary cronfile..."
+rm $CRONFILE_NAME
 
 # Touch files that should be used for secrets
 echo "Touching secret files..."

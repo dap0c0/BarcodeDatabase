@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from PatternExtractor import PatternExtractor
+from .PatternExtractor import PatternExtractor
 
 class InvalidFormatError(KeyError):
     pass
