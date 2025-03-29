@@ -2,15 +2,12 @@ import asyncio
 import sys
 import os
 import json
-from datetime import datetime, timedelta
 from abc import ABC, abstractmethod
-from DataExtractor import DataExtractor
+from .DataExtractor import DataExtractor
 from bs4 import BeautifulSoup
-from bs4.element import Tag
-from MongoClient import MongoClientAsync, CollectionNotFound
-from playwright.async_api import async_playwright
-from DateFormatter import DateFormatterToday
-from Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
+from backend.backend_interface.MongoClient import MongoClientAsync, CollectionNotFound
+from etc.DateFormatter import DateFormatterToday
+from etc.Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
 import playwright._impl._errors
 
 class RealCanadianPageIterator(ABC):

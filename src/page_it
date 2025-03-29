@@ -1,15 +1,14 @@
 #! /opt/homebrew/bin/python3.11
-from Globals import Secrets
+from etc.Globals import Secrets
 from pymongo.errors import ServerSelectionTimeoutError
 from playwright.async_api import async_playwright
-from RealCanadianPageIterator import RealCanadianPageIteratorAsyncDiv
+from backend.scraper.RealCanadianPageIterator import RealCanadianPageIteratorAsyncDiv
 import argparse
 import asyncio
 import sys
 
 FOOD_PAGE_URL = "https://www.realcanadiansuperstore.ca/en/food/c/27985"
 DEFAULT_WORKERS = 4
-
 
 if __name__ == "__main__":
     # Get the filename and root/seed

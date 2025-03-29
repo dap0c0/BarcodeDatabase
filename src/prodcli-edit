@@ -1,9 +1,9 @@
 #! /opt/homebrew/bin/python3.11
 # Change the path to match your python location
-from ProductUploader import JSONProductUploader, SpreadsheetProductUploader
-from DateFormatter import DateFormatterToday, InvalidDateFormatStringError
-from DBMaintainer import DBMaintainer
-from Globals import Secrets
+from backend.backend_interface.ProductUploader import JSONProductUploader, SpreadsheetProductUploader
+from backend.backend_interface.DBMaintainer import DBMaintainer
+from etc.DateFormatter import DateFormatterToday, InvalidDateFormatStringError
+from etc.Globals import Secrets
 import sys
 import asyncio
 import argparse

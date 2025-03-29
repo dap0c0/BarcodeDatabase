@@ -1,26 +1,39 @@
 #! /opt/homebrew/bin/python3.11
 # Change the path to match your python location
-from DBMaintainer import DBMaintainer
-from DateFormatter import InvalidDateFormatStringError
-from Globals import Department, Secrets
+from backend.backend_interface.DBMaintainer import DBMaintainer
+from etc.Globals import Department, Secrets
+from etc.DateFormatter import DateFormatterToday, InvalidDateFormatStringError, InvalidFormatError
 import sys
 import asyncio
 import argparse
 
 async def main():
     parser = argparse.ArgumentParser(description='''
-    Basic script to drop all collections defined
-    in the date interval [start-date, end-date].
-    ''')
+    Basic code migration script that
+    updates the destination column
+    with the code data found in the date
+    interval of [start-date, end-date].''')
     parser.add_argument("-isuri", "--item-server-uri", action="store", dest="isuri", default=Secrets.get_isuri(), type=str)
     parser.add_argument("-dbs", "--databases", action="append", nargs="+", dest="databases", required=True, type=str)
     parser.add_argument("-s", "--start-date", action="store", dest="start_date", required=True, type=str)
     parser.add_argument("-e", "--end-date", action="store", dest="end_date", required=True, type=str)
+    parser.add_argument("-dc", "--dest-col", action="store", dest="dest_col", type=str, default=DBMaintainer.DEFAULT_ACCUMULATE_COL)
     parser.add_argument("-i", dest="interactive", action="store_true")
     args = parser.parse_args()
     db_maintainer = DBMaintainer(args.isuri, args.interactive)
     deps = args.databases[0]
     existing_deps = [dep.value for dep in Department]
+
+    # Verify that the accumulate collection (dest_col)
+    # is not a dynamic collection! The accumulate collection is
+    # meant to allow upserts WITHOUT stateful data such as price and
+    # product package size. If such data were to be upserted into a
+    # dynamic collection like "2025-02-28", the data format of the
+    # collection would be inconsistent, as some documents would have
+    # stateful data and others no.
+    if db_maintainer.is_date_col(args.dest_col):
+        print(f"'{args.dest_col}' should not be selected as a destination collection!", file=sys.stderr)
+        sys.exit(1)
 
     # Allow "all" to be supplied to --databases.
     # If it is, iterate through all databases.
@@ -35,12 +48,14 @@ async def main():
             print(f"The department '{dep}' is invalid!\nPlease choose from {existing_deps}", file=sys.stderr)
             sys.exit(1)
 
-    # Try to handle the date input for our desired
-    # collection for both start and end. If an invalid date
-    # representation was passed, execution will halt.
+    # Try to handle the date input
+    # for our desired collection for both start and end.
+    # If an invalid date representation was passed, execution
+    # will halt.
     try:
         start_date = db_maintainer.handle_date_input(args.start_date)
 
+    # Override exception message (a bit awkward, but whatever hehehe)
     except InvalidDateFormatStringError:
         print(f"The inputted date representation '{args.start_date}' is invalid!", file=sys.stderr)
         sys.exit(1)
@@ -54,11 +69,12 @@ async def main():
         sys.exit(1)
 
     # Every department is valid!
-    # Now, drop every collection in
-    # the established range for each dep.
+    # Now, migrate the relevant data from every collection in
+    # the established range into <department>.accumulate
+    # for each department.
     for dep in deps:
         print(f"#---- Current department: {dep} ----#")
-        await db_maintainer.drop_collections(dep, start_date, end_date)
+        await db_maintainer.aggregrate_codes(dep, start_date, end_date, args.dest_col, upsert=True)
         print()
     
 asyncio.run(main())

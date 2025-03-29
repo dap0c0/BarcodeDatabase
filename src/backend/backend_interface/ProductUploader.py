@@ -1,8 +1,8 @@
-from MongoClient import MongoClientAsync
+from .MongoClient import MongoClientAsync
+from etc.Globals import ProductMapping, Product
 from abc import ABC, abstractmethod
 import json
 from openpyxl import Workbook, load_workbook
-from Globals import ProductMapping, Product
 from string import ascii_uppercase
 
 class ProductUploader(ABC):

@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 import pymongo
-import json
 
 class DatabaseInvalid(pymongo.errors.PyMongoError):
     ''' The queried database is invalid (e.g. doesn't exist).'''

@@ -1,3 +1,4 @@
+from sys import stderr
 from .HTTPResponse import HTTPResponse
 from .SimpleHTTPFactory import SimpleHTTPFactory
 from .BarcodeGenerator import UPCBarcodeGenerator
@@ -7,36 +8,19 @@ from etc.DateFormatter import DateFormatterToday
 from etc.Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
 from abc import ABC
 from backend.backend_interface.MongoClient import MongoClientSync
-from twisted.web.server import Site, NOT_DONE_YET, Session
-from twisted.python.components import registerAdapter
-from zope.interface import Interface, Attribute, implementer
+from twisted.web.server import Site, NOT_DONE_YET
 from twisted.web.resource import Resource
 from twisted.web.http import Request
 from twisted.internet.defer import Deferred
 from twisted.python.failure import Failure
 from twisted.internet import reactor, endpoints, ssl
-from pymongo.errors import OperationFailure
+from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 from bs4 import BeautifulSoup
-import argparse
 import urllib.parse
 import html
-import base64
 import io
 
 HTTP_PORT = 80
-ITEM_SERVER_HTTPS_PORT = 1931
-
-#----- Cookie persistence -------#
-class ICookie(Interface):
-    value = Attribute("A string value that persists per session")
-
-@implementer(ICookie)
-class Cookie(object):
-    def __init__(self, session):
-        self.value = None
-
-# Allow cookie values to persist across sessions.
-registerAdapter(Cookie, Session, ICookie)
 
 class NoPriceRateExtracted(AssertionError):
     pass
@@ -73,9 +57,9 @@ class HTTPResource(Resource, ABC):
                       headers_dict: dict=None,
                       debug: bool=False
                       ) -> Deferred:
-            ''' Issue an http request to the ItemServer endpoint 
+            ''' Issue an http request to the ItemServer endpoint
                 using the given url.
-                         a
+                         
                 All additional keyword args supplied are to be
                 added as header pairs.
                 '''
@@ -130,83 +114,6 @@ class HTTPResource(Resource, ABC):
 
             return d
 
-class SecureResource(HTTPResource, ABC):
-    ''' Limit access to the resource based on the
-    auth server.'''
-    def __init__(self, auth_server_url: str):
-        assert isinstance(auth_server_url, str)
-        self._auth_server_url = auth_server_url
-
-    # Authentication has failed! Redirect the client
-    # to the login page.
-    def redirect_login(self,
-                       err,
-                       request):
-        request.redirect(url="/login")
-        request.finish()
-
-    def _verify_session(self,
-                        request: Request,
-                        username: str=None,
-                        password: str=None,
-                        auth_server_url: str=None,
-                        ) -> Deferred:
-        ''' Query the authentication server endpoint and
-        attempt to authenticate the current session.
-
-        If the client doesn't currently have a session token,
-        the authentication server will provide it upon verification
-        through a set cookie header.
-
-        If the client has a session token, the authentication server
-        will resend the session token.
-
-        If verification fails, no bytes will be returned.
-        '''
-        # Query the item server to perform a recursive search
-        headers = {}
-        headers["Connection"] = "close"
-
-        # If the client has a session cookie,
-        # include that in the request. In a way,
-        # the front-end server acts as a proxy.
-        session = request.getSession()
-        session_id = ICookie(session).value
-        session_cookies = None
-
-        if session_id != None:
-            session_cookies = {}
-            session_cookies[AuthServerCookie.SESSION_COOKIE_NAME] = session_id
-
-        if username and password:
-            auth_b64 = self._generate_auth_basic(username, password)
-            headers["Authorization"] = f"Basic {auth_b64}"
-
-        d = self._promise_http(url=auth_server_url, cookies_dict=session_cookies, headers_dict=headers, debug=True)
-
-        # Callback:
-        # display content of response for debugging.
-        # If the auth server's response is empty,
-        # authentication failed.
-        def print_response(http_response: HTTPResponse):
-            reactor.callWhenRunning(print, f"Response is {http_response}")
-            assert len(http_response) > 0
-            return http_response
-
-        d.addCallback(print_response)
-        return d
-
-    def _generate_auth_basic(self,
-                             username: str,
-                             password: str) -> str:
-        ''' Generate the base64 token of
-        "<username>:<password>"'''
-        assert isinstance(username, str)
-        assert isinstance(password, str)
-        temp = f"{username}:{password}"
-        return base64.b64encode(bytes(temp, "utf-8")).decode("utf-8")
-
-
 class RealProduct():
     # 1 kg = 2.20462262 lbs
     KG_TO_LBS_RATIO = 2.20462262
@@ -260,67 +167,6 @@ class RealProduct():
         assert total_price > 0
         return total_price
 
-class LoginPage(SecureResource):
-    def _generate_login_forms(self):
-        ''' Generate html for login page.
-        Will include basic username and password
-        fields.'''
-        
-        html = '''<form method="POST">
-                    <div>
-                        <input type="text" name="username" placeholder="username"/>
-                    </div>
-                    <div>
-                        <input type="text" name="password" placeholder="password"/>
-                    </div>
-                        <button type="submit">Login</button>
-                    </div>
-                </form>'''
-        return bytes(html, "utf-8")
-
-    def render_GET(self, request):
-        ''' Allow the client to input their username
-            and password.'''
-        return (b"<!DOCTYPE html><html><head><meta charset='utf-8'>" + \
-                b"<title></title></head><body>" + \
-                self._generate_login_forms())
-
-    def render_POST(self, request):
-        ''' Receive the username and password.
-            Attempt to authenticate with the given parameters.
-            If a match is made, redirect them to the main page.'''
-        # Receive login parameters
-        username = request.args[b"username"][0].decode("utf-8")
-        username = html.escape(username)
-        password = request.args[b"password"][0].decode("utf-8")
-        password = html.escape(password)
-        
-        # Callback:
-        # Authentication has passed! Set the token
-        # as session_id for the client.
-        def set_session_cookie(http_response: HTTPResponse):
-            token = str(http_response)
-            assert isinstance(token, str)
-            assert len(token) > 0
-            print(f"Setting session cookie as {token}")
-            session = request.getSession()
-            ICookie(session).value = token
-            print(f"Cookies: {ICookie(request.getSession()).value}")
-
-        # Callback:
-        # Redirect the client to the home page.
-        def redirect_home(_):
-            request.redirect(url="/")
-            request.finish()
-
-        # Verify that the parameters are correct.
-        # If so, add the session id to our handler.
-        d = self._verify_session(request, username, password, self._auth_server_url)
-        d.addCallback(set_session_cookie)
-        d.addCallback(redirect_home)
-        d.addErrback(self.redirect_login, request=request)
-        return NOT_DONE_YET
-
 class HomePage(HTTPResource):
     # Token has been authenticated! Display the
     # page html to the client.
@@ -357,14 +203,6 @@ class HomePage(HTTPResource):
 
         # Fire the callback chain off!
         d.callback(None)
-        return NOT_DONE_YET
-
-class SecureHomePage(HomePage, SecureResource):
-    def render_GET(self, request):
-        '''Allow user to navigate between search and data addition.'''
-        d = self._verify_session(request, auth_server_url=self._auth_server_url)
-        d.addCallback(self.render_page, request=request)
-        d.addErrback(self.redirect_login, request=request)
         return NOT_DONE_YET
 
 class BarcodeBruteforcerPage(HTTPResource):
@@ -998,31 +836,6 @@ class PLUBarcodeGeneratorPage(HTTPResource):
         d.callback(None)
         return NOT_DONE_YET
 
-class SecureBarcodeBruteforcerPage(BarcodeBruteforcerPage, SecureResource):
-    def __init__(self, auth_server_url: str):
-        BarcodeBruteforcerPage.__init__(self)
-        SecureResource.__init__(self, auth_server_url)
-
-    def render_GET(self, request: Request):
-        ''' Allow the user to input a UPC barcode (12 digits),
-        with an x signifying a missing digit.'''
-
-        d = self._verify_session(request, auth_server_url=self._auth_server_url)
-        d.addCallbacks(self.render_page, self.redirect_login,
-                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
-        return NOT_DONE_YET
-
-    def render_POST(self, request: Request):
-        ''' With the inputted UPC barcode (11 digits with x),
-        dynamically generate all barcodes and display on the page.'''
-
-        d = self._verify_session(request, auth_server_url=self._auth_server_url)
-        d.addCallbacks(self.check_input, self.redirect_login,
-                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
-        d.addCallbacks(self.render_barcodes, self.render_page,
-                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
-        return NOT_DONE_YET
- 
 class SearchPage(HTTPResource):
     INDENT_SPACES = 4
     INVALID_CHARS = "{}[]()<>^"
@@ -1342,75 +1155,41 @@ class SearchPage(HTTPResource):
 
         return data
 
-class SecureSearchPage(SearchPage, SecureResource):
-    def __init__(self,
-                 auth_server_url: str,
-                 api_url: str):
-        assert isinstance(auth_server_url, str)
-        assert isinstance(api_url, str)
-        SecureResource.__init__(self, auth_server_url)
-        SearchPage.__init__(self, api_url)
+class FrontEndServer():
+    def __init__(self, item_server_uri: str, port: int=HTTP_PORT):
+        assert isinstance(item_server_uri, str)
+        assert isinstance(port, int)
 
-    def render_GET(self, request: Request):
-        ''' Allow the user to input information
-            into a search bar to perform
-            a recursive grep search.
+        if not port >= 0:
+            raise ValueError("The port number must be >= 0!")
+        self._port = port
+        self._root = self._get_web_tree(item_server_uri)
 
-            For all items returned in the search page,
-            table them and display hyperlinks to each page.'''
+    # Question: would it be more efficient to allow program
+    # to supply port in serve instead of having to reinitialize
+    # servers just to change ports? It might break code in HTTPResource.
+    def serve(self):
+        ''' Serve the web tree through the supplied port.
+        Be advised: will block the running program.'''
 
-        # Start processing!
-        d = self._verify_session(request, auth_server_url=self._auth_server_url)
-        d.addCallbacks(self.check_query, self.redirect_login,
-                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
-        d.addCallbacks(self.search_database, self.render_page,
-                       callbackKeywords={"request": request}, errbackKeywords={"request": request})
-        # d.addCallback(suelf.display_json, request=request)
-        d.addCallback(self.display_nonjson, request=request)
-        return NOT_DONE_YET
+        # Serve connections
+        factory = Site(self._root)
+        endpoint = endpoints.TCP4ServerEndpoint(reactor, self._port)
+        endpoint.listen(factory)
+        reactor.run()
 
-# -------- MAIN PROGRAM -------- #
-def get_web_tree_no_auth(item_server_uri):
-    root = Resource()
-    # root.putChild(b"", HomePage())
-    root.putChild(b"", HomePage())
-    root.putChild(b"search", SearchPage(item_server_uri))
-    root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage())
-    root.putChild(b"plu_barcode_generator", PLUBarcodeGeneratorPage())
-    return root
+    def _get_web_tree(self, item_server_uri: str) -> Resource:
+        '''Return the web tree, bound to some
+        remote item server endpoint.'''
+        root = Resource()
+        root.putChild(b"", HomePage())
+        try:
+            root.putChild(b"search", SearchPage(item_server_uri))
 
-def get_web_tree_auth(item_server_uri: str, auth_server_uri: str):
-    root = Resource()
-    root.putChild(b"login", LoginPage(auth_server_uri))
-    root.putChild(b"", SecureHomePage(auth_server_uri))
-    root.putChild(b"search", SecureSearchPage(auth_server_uri, item_server_uri))
-    root.putChild(b"barcode_bruteforcer", SecureBarcodeBruteforcerPage(auth_server_uri))
-    return root
+        # Override error message
+        except ServerSelectionTimeoutError:
+            raise ServerSelectionTimeoutError("Could not establish a connection with the remote endpoint.")
 
-    
-if __name__ == "__main__":
-    # Get the mongodb endpoint for our item server.
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--item_server_uri", "-isuri", action="store", type=str, dest="item_server_uri", required=True)
-    parser.add_argument("--auth_server_uri", "-asuri", action="store", type=str, dest="auth_server_uri")
-    args = parser.parse_args()
-    item_server_uri = args.item_server_uri
-    auth_server_uri = args.auth_server_uri
-
-    # If the auth_server_uri is provided,
-    # then run the website with authentication.
-    if auth_server_uri:
-        root = get_web_tree_auth(item_server_uri, auth_server_uri)
-
-    else:
-        root = get_web_tree_no_auth(item_server_uri)
-
-    # Serve the web tree
-    factory = Site(root)
-
-    # Serve connections
-    endpoint = endpoints.TCP4ServerEndpoint(reactor, HTTP_PORT)
-    endpoint.listen(factory)
-    reactor.run()
-
-
+        root.putChild(b"barcode_bruteforcer", BarcodeBruteforcerPage())
+        root.putChild(b"plu_barcode_generator", PLUBarcodeGeneratorPage())
+        return root

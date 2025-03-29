@@ -1,7 +1,7 @@
 #! /opt/homebrew/bin/python3.11
 # Change the path to match your python location
-from DBMaintainer import DBMaintainer, InvalidDateFormatStringError
-from Globals import Department, Secrets
+from backend.backend_interface.DBMaintainer import DBMaintainer, InvalidDateFormatStringError
+from etc.Globals import Department, Secrets
 import sys
 import asyncio
 import argparse
