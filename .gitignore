@@ -13,4 +13,4 @@
 # After usage of src/prodcli-sync/user_srcipts/prodcli-edit,
 # a products.json or products.xlsx file may be generated.
 # Ignore these data files or any filetype variant.
-**/*.[a-zA-Z]
+**/products.[a-zA-Z]*
