@@ -3,6 +3,7 @@ from etc.Globals import Secrets
 from pymongo.errors import ServerSelectionTimeoutError
 from playwright.async_api import async_playwright
 from backend.scraper.RealCanadianPageIterator import RealCanadianPageIteratorAsyncDiv
+from backend.backend_interface.ConnectionVerifier import ConnectionVerifier
 import argparse
 import asyncio
 import sys
@@ -38,21 +39,9 @@ if __name__ == "__main__":
     # Open an asynchronous chromium browser
     async def run_async():
         async with async_playwright() as p:
-            try:
-                pi = RealCanadianPageIteratorAsyncDiv(playwright=p,
-                                                browser="chromium",
-                                                endpoint_uri=isuri,
-                                                root_url=seed,
-                                                headless=True,
-                                                slow_mo=0,
-                                                latitude_longitude=(49.8938887, -97.1886292),
-                                                permissions=["geolocation"],
-                                                store_location=1511)
-                sys.stdout.write(f"Connection to {isuri} is valid!")
-                
-            except ServerSelectionTimeoutError:
-                sys.stderr.write(f"Failed to connect to {isuri}\n")
-                sys.exit()
+            # Verify that the connection with the server is valid
+            cv = ConnectionVerifier(args.isuri)
+            await cv.verify_connection()
 
             # The connection to the item server is valid.
             # Initialize browser context, and start scraping.
@@ -64,30 +53,16 @@ if __name__ == "__main__":
             # extract all leaves from the supplied departments,
             # cache those leaves into leaves/leaves.json for future convenience,
             # and then start extracting products from all leaves.
+            pi = RealCanadianPageIteratorAsyncDiv(playwright=p,
+                                            browser="chromium",
+                                            endpoint_uri=isuri,
+                                            root_url=seed,
+                                            headless=True,
+                                            slow_mo=0,
+                                            latitude_longitude=(49.8938887, -97.1886292),
+                                            permissions=["geolocation"],
+                                            store_location=1511)
             await pi.initialize()
             await pi.scrape(grocery, home_beauty_baby, joe_fresh, workers)
 
-    async def run_test():
-        async with async_playwright() as p:
-            try:
-                pi = RealCanadianPageIteratorAsyncDiv(playwright=p,
-                                                browser="chromium",
-                                                endpoint_uri=isuri,
-                                                root_url=seed,
-                                                headless=True,
-                                                slow_mo=0,
-                                                latitude_longitude=(49.8938887, -97.1886292),
-                                                permissions=["geolocation"],
-                                                store_location=1511)
-                sys.stdout.write(f"Connection to {isuri} is valid!")
-                
-            except ServerSelectionTimeoutError:
-                sys.stderr.write(f"Failed to connect to {isuri}\n")
-                sys.exit()
-
-            await pi.initialize()
-            # await pi._test_code_migration()
-
-
     asyncio.run(run_async())
-    # asyncio.run(run_test())

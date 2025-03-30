@@ -3,6 +3,7 @@
 from backend.backend_interface.DBMaintainer import DBMaintainer
 from etc.Globals import Department, Secrets
 from etc.DateFormatter import DateFormatterToday, InvalidDateFormatStringError, InvalidFormatError
+from backend.backend_interface.ConnectionVerifier import ConnectionVerifier
 import sys
 import asyncio
 import argparse
@@ -68,7 +69,10 @@ async def main():
         print(f"The inputted date representation '{args.end_date}' is invalid!", file=sys.stderr)
         sys.exit(1)
 
-    # Every department is valid!
+    # Verify that the connection with the server is valid
+    cv = ConnectionVerifier(args.isuri)
+    await cv.verify_connection()
+
     # Now, migrate the relevant data from every collection in
     # the established range into <department>.accumulate
     # for each department.

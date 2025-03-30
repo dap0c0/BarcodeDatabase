@@ -1,6 +1,7 @@
 #! /opt/homebrew/bin/python3.11
 # Change the path to match your python location
 from backend.backend_interface.DBMaintainer import DBMaintainer
+from backend.backend_interface.ConnectionVerifier import ConnectionVerifier
 from etc.DateFormatter import InvalidDateFormatStringError
 from etc.Globals import Department, Secrets
 import sys
@@ -52,6 +53,10 @@ async def main():
     except InvalidDateFormatStringError:
         print(f"The inputted date representation '{args.end_date}' is invalid!", file=sys.stderr)
         sys.exit(1)
+
+    # Verify that the connection with the server is valid
+    cv = ConnectionVerifier(args.isuri)
+    await cv.verify_connection()
 
     # Every department is valid!
     # Now, drop every collection in

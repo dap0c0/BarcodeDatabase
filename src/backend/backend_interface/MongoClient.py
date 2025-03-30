@@ -186,6 +186,23 @@ class MongoClientAsync(MongoClient):
                 return True
         else:
             return False
+    
+    async def connection_valid(self, err_criteria: pymongo.errors.ConnectionFailure, errback) -> bool:
+        ''' Check that the connection with the remote endpoint
+            is valid. Upon catching an error of class <err_criteria>,
+            call the errback.
+
+            err_criteria: the specific error to catch before triggering errback
+            errback: the subroutine to run upon catching err_criteria
+
+            returns: None'''
+        try:
+            await self._client.admin.command('ping')
+            return True
+
+        except err_criteria:
+            errback()
+            return False
 
 class MongoClientSync(MongoClient):
     # Insertions

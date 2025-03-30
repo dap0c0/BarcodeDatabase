@@ -1,6 +1,8 @@
 from .MongoClient import MongoClientAsync, CollectionNotFound, DatabaseInvalid
-from etc.DateFormatter import DateFormatter, DateFormatterToday, InvalidDateFormatStringError, InvalidFormatError
-from datetime import date, datetime, timedelta
+from etc.DateFormatter import DateFormatter, DateFormatterToday, InvalidDateFormatStringError
+from datetime import datetime, timedelta
+from pymongo.errors import ServerSelectionTimeoutError
+import sys
 
 class DateTimeRange():
     def __init__(self, start_date: str, end_date: str):
@@ -50,6 +52,7 @@ class DBMaintainer():
     def __init__(self, endpoint_url: str, interactive: bool):
         assert isinstance(endpoint_url, str)
         assert isinstance(interactive, bool)
+        self._endpoint_url = endpoint_url
         self._client = MongoClientAsync(endpoint_url)
         self._interactive = interactive
         self._df = DateFormatterToday()

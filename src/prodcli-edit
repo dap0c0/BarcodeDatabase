@@ -2,6 +2,7 @@
 # Change the path to match your python location
 from backend.backend_interface.ProductUploader import JSONProductUploader, SpreadsheetProductUploader
 from backend.backend_interface.DBMaintainer import DBMaintainer
+from backend.backend_interface.ConnectionVerifier import ConnectionVerifier
 from etc.DateFormatter import DateFormatterToday, InvalidDateFormatStringError
 from etc.Globals import Secrets
 import sys
@@ -95,6 +96,10 @@ async def main():
             print(f"The inputted date representation '{collection}' is invalid!", file=sys.stderr)
             sys.exit(1)
 
+    # Verify that the connection with the server is valid
+    cv = ConnectionVerifier(args.isuri)
+    await cv.verify_connection()
+
     # All arguments provided are validated!
     # Start program.
     selected_uploader = SpreadsheetProductUploader if spreadsheet_chosen \
@@ -107,6 +112,7 @@ async def main():
         print(f"Pushed {products_pushed} products to {database}.{collection}!") if debug else None
 
     elif get_chosen:
+        print(f"Getting products from {database}.{collection}...")
         products_dict = await product_interface.get_products()
         print(f"Got {len(products_dict)} product(s)!") if debug else None
         await product_interface.write_file(products_dict, filename)
