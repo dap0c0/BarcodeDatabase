@@ -15,7 +15,7 @@ services:
       # from the current working directory
       # to the secret volume.
       - item_server_url
-    command: sh -c "python3.11 ./src/page_it -isuri $(cat /run/secrets/item_server_url)"
+    command: sh -c "python3.11 /app/page_it -isuri $(cat /run/secrets/item_server_url)"
 
   leaf_extractor:
     build:
@@ -27,7 +27,7 @@ services:
       # from the current working directory
       # to the secret volume.
       - item_server_url
-    command: sh -c "python3.11 ./src/page_it -isuri $(cat /run/secrets/item_server_url) --grocery --home-beauty-baby --joe-fresh"
+    command: sh -c "python3.11 /app/page_it -isuri $(cat /run/secrets/item_server_url) --grocery"
 
   synchronizer:
     build:
@@ -39,7 +39,7 @@ services:
     # Synchronize today's collection in all databases
     # (grocery, joe-fresh, home-beauty-baby) with all
     # the product code data found in database.accumulate
-    command: sh -c "python3.11 ./src/prodcli-sync -isuri $(cat /run/secrets/item_server_url) -dbs all -dc t"
+    command: sh -c "python3.11 /app/prodcli-sync -isuri $(cat /run/secrets/item_server_url) -dbs all -dc t"
 
   accumulator:
     build:
@@ -51,7 +51,7 @@ services:
     # Accumulate all code data from 14 days ago to today
     # in each database (grocery, joe-fresh, home-beauty-baby)
     # and copy into database.accumulate
-    command: sh -c "python3.11 ./src/prodcli-accumulate -isuri $(cat /run/secrets/item_server_url) -dbs all -s t-14 -e t"
+    command: sh -c "python3.11 /app/prodcli-accumulate -isuri $(cat /run/secrets/item_server_url) -dbs all -s t-14 -e t"
 
 
 # Secret volumes

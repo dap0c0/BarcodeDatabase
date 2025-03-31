@@ -48,4 +48,6 @@ RUN ln -fs /usr/share/zoneinfo/America/Chicago /etc/localtime && \
 USER appuser
 
 # Copy the source code into the container.
-COPY . .
+COPY ./src/backend/backend_interface/ /app/backend/backend_interface/
+COPY ./src/etc/ /app/etc/
+COPY ./src/prodcli-accumulate /app/prodcli-accumulate

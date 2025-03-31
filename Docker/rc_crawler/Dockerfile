@@ -62,4 +62,6 @@ RUN chmod 700 ./leaves
 USER appuser
 
 # Copy the source code into the container.
-COPY . .
+COPY ./src/backend/ /app/backend/
+COPY ./src/etc/ /app/etc/
+COPY ./src/page_it /app/

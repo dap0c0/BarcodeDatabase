@@ -36,7 +36,7 @@ RUN adduser \
 # into this layer.
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,source=requirements.txt,target=requirements.txt \
-    python -m pip install -r requirements.txt
+    python -m pip install -r /app/requirements.txt
 
 # Set timezone
 RUN ln -fs /usr/share/zoneinfo/America/Chicago /etc/localtime && \
@@ -45,8 +45,11 @@ RUN ln -fs /usr/share/zoneinfo/America/Chicago /etc/localtime && \
 # Switch to the non-privileged user to run the application.
 USER appuser
 
-# Copy the source code into the container.
-COPY . .
-
 # Expose the port that the application listens on.
 EXPOSE 80
+
+COPY ./src/frontend/ /app/frontend/
+COPY ./src/backend/backend_interface/ /app/backend/backend_interface/
+COPY ./src/etc/ /app/etc/
+COPY ./src/run_frontend /app/run_frontend
+
