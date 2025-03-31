@@ -6,9 +6,8 @@ from backend.scraper.RealCanadianPageIterator import RealCanadianPageIteratorAsy
 from backend.backend_interface.ConnectionVerifier import ConnectionVerifier
 import argparse
 import asyncio
-import sys
 
-FOOD_PAGE_URL = "https://www.realcanadiansuperstore.ca/en/food/c/27985"
+FOOD_PAGE_URL = "https://www.realcanadiansuperstore.ca/en/search?search-bar=meat"
 DEFAULT_WORKERS = 4
 
 if __name__ == "__main__":
