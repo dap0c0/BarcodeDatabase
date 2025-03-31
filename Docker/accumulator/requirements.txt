@@ -1,0 +1,4 @@
+pyopenssl==24.3.0
+service_identity==24.2.0
+pymongo==4.10.1
+

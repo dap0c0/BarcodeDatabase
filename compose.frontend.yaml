@@ -20,7 +20,7 @@ services:
       # Automatically mount the contents of file from the
       # current working directory to the volume
       - item_server_url
-    command: sh -c "python3.11 FrontEndServer.py -isuri $(cat /run/secrets/item_server_url)"
+    command: sh -c "python3.11 ./src/run_frontend -isuri $(cat /run/secrets/item_server_url)"
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -36,4 +36,4 @@ services:
 # Secret volumes
 secrets:
   item_server_url:
-    file: item_server_url.txt
+    file: ./config/item_server_url.txt

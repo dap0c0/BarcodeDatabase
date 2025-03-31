@@ -85,5 +85,9 @@ class Secrets(Enum):
     ISURI_FILE="item_server_url.txt"
 
     def get_isuri():
-        with open(Secrets.ISURI_FILE.value, "r") as rfile:
-            return rfile.read().strip()
+        try:
+            with open(Secrets.ISURI_FILE.value, "r") as rfile:
+                return rfile.read().strip()
+
+        except FileNotFoundError:
+            return None
