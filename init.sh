@@ -18,13 +18,15 @@ CLOUDFLARE_TUNNEL_TOKEN_PATH=$CONFIG_PATH/cf_tunnel_token.txt
 # ----- Backend ----- #
 # Normal crawl vars
 # By default, crawl 10 times
-# starting at 2:00 am everyday.
+# starting at 1:00 am everyday.
 NUM_CRAWLS_PER_DAY=10
-CRAWL_START_HOUR=2
+CRAWL_START_HOUR=1
 CRAWL_START_MINUTE=0
 BACKEND_COMPOSE_PATH=$PROJECT_PATH/compose.backend.yaml
 CRAWLER_SERVICE=rc_crawler
 LEAF_EXTRACTOR_SERVICE=leaf_extractor
+ACCUMULATOR_SERVICE=accumulator
+SYNCHRONIZER_SERVICE=synchronizer
 
 # Leaf extraction vars
 # By default, crawl on Sunday, 12:00 am
@@ -32,6 +34,18 @@ LEAF_EXTRACTOR_SERVICE=leaf_extractor
 LEAF_EXTRACTION_DAY=0
 LEAF_EXTRACTION_START_HOUR=0
 LEAF_EXTRACTION_START_MINUTE=0
+
+# Accumulator vars
+# By default, accumulate all code data
+# at 6:40 am everyday
+ACCUMULATOR_START_HOUR=6
+ACCUMULATOR_START_MINUTE=40
+
+# Sync vars
+# By default, sync all code data
+# at 6:40 am everyday
+SYNC_START_HOUR=6
+SYNC_START_MINUTE=40
 
 # ----- Frontend ----- #
 # By default, start the frontend server
@@ -54,7 +68,6 @@ echo "Making temporary cronfile..."
 touch $CRONFILE_NAME
 
 # Backend leaf extraction
-# and code synchronization
 echo "Instructing crontab to initiate crawl $NUM_CRAWLS_PER_DAY times per day" \
   "starting at $CRAWL_START_HOUR:$CRAWL_START_MINUTE"
 echo "$CRAWL_START_MINUTE $CRAWL_START_HOUR * * *" \
@@ -67,6 +80,18 @@ echo "Instructing crontab to extract leaves on day $LEAF_EXTRACTION_DAY" \
 echo "$LEAF_EXTRACTION_START_MINUTE $LEAF_EXTRACTION_START_HOUR * * $LEAF_EXTRACTION_DAY" \
   "$BASH_PATH -c \"for i in {1..$NUM_CRAWLS_PER_DAY}:; do" \
   "$DOCKER_PATH compose -f $BACKEND_COMPOSE_PATH run $CRAWLER_SERVICE; done\"" >>$CRONFILE_NAME
+
+# Backend code accumulation
+echo "Instructing crontab to accumulate codes" \
+  "starting at $ACCUMULATOR_START_HOUR:$ACCUMULATOR_START_MINUTE"
+echo "$ACCUMULATOR_START_MINUTE $ACCUMULATOR_START_HOUR * * *" \
+  "$DOCKER_PATH compose -f $BACKEND_COMPOSE_PATH run $ACCUMULATOR_SERVICE" >>$CRONFILE_NAME
+
+# Backend code synchronization
+echo "Instructing crontab to synchronize codes" \
+  "starting at $SYNC_START_HOUR:$SYNC_START_MINUTE"
+echo "$SYNC_START_MINUTE $SYNC_START_HOUR * * *" \
+  "$DOCKER_PATH compose -f $BACKEND_COMPOSE_PATH run $ACCUMULATOR_SERVICE" >>$CRONFILE_NAME
 
 # Daemonize the frontend server
 # at designated time
