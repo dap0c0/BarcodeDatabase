@@ -91,7 +91,7 @@ echo "$ACCUMULATOR_START_MINUTE $ACCUMULATOR_START_HOUR * * *" \
 echo "Instructing crontab to synchronize codes" \
   "starting at $SYNC_START_HOUR:$SYNC_START_MINUTE"
 echo "$SYNC_START_MINUTE $SYNC_START_HOUR * * *" \
-  "$DOCKER_PATH compose -f $BACKEND_COMPOSE_PATH run $ACCUMULATOR_SERVICE" >>$CRONFILE_NAME
+  "$DOCKER_PATH compose -f $BACKEND_COMPOSE_PATH run $SYNCHRONIZER_SERVICE" >>$CRONFILE_NAME
 
 # Daemonize the frontend server
 # at designated time
