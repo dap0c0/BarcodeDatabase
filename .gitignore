@@ -1,0 +1,21 @@
+# Ignore cache directories and files
+**/__pycache__/
+**/.DS_STORE
+**/*.pyc
+
+# Ignore product url data
+**/leaves/
+
+# For security, ignore secret config data used in production
+**/item_server_url.txt
+**/cf_tunnel_token.txt
+config/*
+
+# After usage of src/prodcli-sync/user_srcipts/prodcli-edit,
+# a products.json or products.xlsx file may be generated.
+# Ignore these data files or any filetype variant.
+**/products.[a-zA-Z]*
+
+# local machine ignores
+delete_containers.sh
+rebuild_images.sh
