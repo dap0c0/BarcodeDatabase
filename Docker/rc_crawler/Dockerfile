@@ -64,4 +64,5 @@ USER appuser
 # Copy the source code into the container.
 COPY ./src/backend/ /app/backend/
 COPY ./src/etc/ /app/etc/
-COPY ./src/page_it /app/
+COPY ./src/prodcli-crawl /app/
+copy ./src/prodcli-scrape /app/

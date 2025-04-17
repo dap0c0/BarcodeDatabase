@@ -330,7 +330,6 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
 
         # Begin scraping and writing
         # each product to the database.
-        print(f"Scraping departments {', '.join([key for key in leafs_dict])}")
         await self._scrape_products(leafs_dict, workers)
 
     async def crawl(self,
@@ -339,8 +338,8 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
                     jf: bool,
                     workers: int):
         '''If <grocery>, <hbb> or <jf> is provided, extract every leaf from the website
-        only for the departements passed. After every leaf is extracted,
-        scrape every leaf for the products.
+        only for the departments passed. Save every leaf into the default
+        json file.
 
         <workers> defines how many pages can be scraping at once.
         This number may be tweaked depending on the local machine's
@@ -356,7 +355,6 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
 
             with open(self._leafs_filepath, "w") as wfile:
                 wfile.write(json.dumps(leafs_dict, indent=self.DEFAULT_INDENT))
- 
 
     async def _migrate_codes(self,
                             db_src: str,
@@ -484,7 +482,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
 
         # Interestingly, the website stores multiple department products in a
         # single iterable leaf. It contains Deli, Meals-to-Go, Natural Foods,
-        # actual Grocery, Meat, and Seafood.
+        # actual Grocery, Meat, and Seafood, despite each being seperate departments.
         if grocery:
             alert("Extracting leaf(s) for Grocery...")
             grocery_urls = await self._get_urls_surface(grocery_ul_tag)

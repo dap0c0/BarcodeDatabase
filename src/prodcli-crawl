@@ -3,7 +3,6 @@ from etc.Globals import Secrets
 from pymongo.errors import ServerSelectionTimeoutError
 from playwright.async_api import async_playwright
 from backend.scraper.RealCanadianPageIterator import RealCanadianPageIteratorAsyncDiv
-from backend.scraper.RealCanadianPageIterator import LeafFileNotInstantiatedError
 from backend.backend_interface.ConnectionVerifier import ConnectionVerifier
 import argparse
 import asyncio
@@ -72,11 +71,5 @@ if __name__ == "__main__":
                                             permissions=["geolocation"],
                                             store_location=1511)
             await pi.initialize()
-
-            try:
-                await pi.scrape(grocery, home_beauty_baby, joe_fresh, workers)
-            except LeafFileNotInstantiatedError as e:
-                print(str(e), file=sys.stderr)
-                print("Please populate the leaves file appropriately before scraping.", file=sys.stderr)
-                sys.exit(1)
+            await pi.crawl(grocery, home_beauty_baby, joe_fresh, workers)
     asyncio.run(run_async())
