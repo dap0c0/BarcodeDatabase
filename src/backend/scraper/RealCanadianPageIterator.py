@@ -10,6 +10,9 @@ from etc.DateFormatter import DateFormatterToday
 from etc.Globals import GROCERY_NAME, HOME_BEAUTY_BABY_NAME, JF_NAME
 import playwright._impl._errors
 
+class LeafFileNotInstantiatedError(FileNotFoundError):
+    pass
+
 class RealCanadianPageIterator(ABC):
     NO_GRID_MESSAGE = "No items are available."
     DEFAULT_LEAVES_FILENAME = "leaves.json"
@@ -57,6 +60,14 @@ class RealCanadianPageIterator(ABC):
                workers: int):
         pass
 
+    @abstractmethod
+    def crawl(self,
+              grocery: bool,
+              hbb: bool,
+              jf: bool,
+              workers: int):
+        pass
+
 class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
     def __init__(self,
                  playwright,
@@ -83,7 +94,6 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
         self._db_client = MongoClientAsync(endpoint_uri)
         self._playwright = playwright
         self._leafs_filepath = leafs_filepath
-
 
     async def initialize(self):
         self._browser = await getattr(self._playwright, self._browser_str).launch(
@@ -284,23 +294,57 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
 class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
     async def scrape(self,
                      grocery: bool,
-                     hbb: bool,
-                     jf: bool,
+                     home_beauty_baby: bool,
+                     joe_fresh: bool,
                      workers: int):
         ''' Scrape every product from every leaf on the website.
-        If <grocery>, <hbb>, and <jf> are not provided, utilize the leafs deserialized
-        from self._leaf_filepath.
+        For all departments provided (passed as true), utilize only the leaves
+        from their table in self._leafs_filepath.
 
-        If <grocery>, <hbb> or <jf> is provided, extract every leaf from the website
+        <workers> defines how many pages can be scraping at once.
+        This number may be tweaked depending on the local machine's
+        tolerance for network traffic.'''
+        supplied_args = {**locals()}
+        leafs_dict = None
+
+        # Attempt to read from the leaves file.
+        # If it doesn't exist, bubble the appropriate
+        # exception to the caller.
+        try:
+            with open(self._leafs_filepath, "r") as rfile:
+                leafs_dict = json.load(rfile)
+
+                # Remove all entries for departments not supplied
+                for arg, val in supplied_args.items():
+                    if isinstance(val, bool) and not val:
+                        assert isinstance(arg, str)
+
+                        # NOTE: this is an ugly workaround for the fact that
+                        # the arguments supplied with _ (e.g. joe_fresh) but are
+                        # written with - in the leafs dictionary (e.g. joe-fresh).
+                        # This code will be refactored at some point.
+                        arg = arg.replace("_", "-")
+                        leafs_dict.pop(arg, None)
+        except FileNotFoundError as e:
+            raise LeafFileNotInstantiatedError(f"{self._leafs_filepath} has not been instantiated!")
+
+        # Begin scraping and writing
+        # each product to the database.
+        print(f"Scraping departments {', '.join([key for key in leafs_dict])}")
+        await self._scrape_products(leafs_dict, workers)
+
+    async def crawl(self,
+                    grocery: bool,
+                    hbb: bool,
+                    jf: bool,
+                    workers: int):
+        '''If <grocery>, <hbb> or <jf> is provided, extract every leaf from the website
         only for the departements passed. After every leaf is extracted,
         scrape every leaf for the products.
 
         <workers> defines how many pages can be scraping at once.
         This number may be tweaked depending on the local machine's
         tolerance for network traffic.'''
-        leafs_dict = None
-        
-        # Crawl for leaves.
         if grocery or hbb or jf:
             leafs_dict = await self._extract_all_leaves(workers, grocery, hbb, jf)
 
@@ -312,16 +356,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
 
             with open(self._leafs_filepath, "w") as wfile:
                 wfile.write(json.dumps(leafs_dict, indent=self.DEFAULT_INDENT))
-
-        # No department was provided.
-        # Read from the leaves file.
-        else:
-            with open(self._leafs_filepath, "r") as rfile:
-                leafs_dict = json.load(rfile)
-
-        # Begin scraping and writing
-        # each product to the database.
-        await self._scrape_products(leafs_dict, workers)
+ 
 
     async def _migrate_codes(self,
                             db_src: str,

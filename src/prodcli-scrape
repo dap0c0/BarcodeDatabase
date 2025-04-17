@@ -3,9 +3,11 @@ from etc.Globals import Secrets
 from pymongo.errors import ServerSelectionTimeoutError
 from playwright.async_api import async_playwright
 from backend.scraper.RealCanadianPageIterator import RealCanadianPageIteratorAsyncDiv
+from backend.scraper.RealCanadianPageIterator import LeafFileNotInstantiatedError
 from backend.backend_interface.ConnectionVerifier import ConnectionVerifier
 import argparse
 import asyncio
+import sys
 
 FOOD_PAGE_URL = "https://www.realcanadiansuperstore.ca/en/search?search-bar=meat"
 DEFAULT_WORKERS = 4
@@ -20,11 +22,11 @@ if __name__ == "__main__":
     parser.add_argument("-w", "--workers", action="store", dest="workers", type=int, default=DEFAULT_WORKERS)
     
     # Allow the user to control which departments to scrape.
-    # If no department is supplied, allow the page iterator
-    # to use the leaf cache json file.
+    # If --all or -* is suppiled, scrape all possible departments.
     parser.add_argument("--grocery", action="store_true", dest="grocery")
     parser.add_argument("--home-beauty-baby", action="store_true", dest="home_beauty_baby")
     parser.add_argument("--joe-fresh", action="store_true", dest="joe_fresh")
+    parser.add_argument("--all", "-*", action="store_true", dest="all")
 
     # Get the values
     args = parser.parse_args()
@@ -34,6 +36,14 @@ if __name__ == "__main__":
     grocery = args.grocery
     home_beauty_baby = args.home_beauty_baby
     joe_fresh = args.joe_fresh
+
+    if args.all:
+        grocery, home_beauty_baby, joe_fresh = (True,)*3
+
+    # Check that at least one department was provided
+    if not grocery and not home_beauty_baby and not joe_fresh:
+        print("At least one department must be provided! Exitting.")
+        sys.exit(1)
 
     # Open an asynchronous chromium browser
     async def run_async():
@@ -62,6 +72,10 @@ if __name__ == "__main__":
                                             permissions=["geolocation"],
                                             store_location=1511)
             await pi.initialize()
-            await pi.scrape(grocery, home_beauty_baby, joe_fresh, workers)
-
+            try:
+                await pi.scrape(grocery, home_beauty_baby, joe_fresh, workers)
+            except LeafFileNotInstantiatedError as e:
+                print(str(e), file=sys.stderr)
+                print("Please populate the leaves file appropriately before scraping.", file=sys.stderr)
+                sys.exit(1)
     asyncio.run(run_async())
