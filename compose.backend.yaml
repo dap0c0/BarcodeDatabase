@@ -16,6 +16,8 @@ services:
       # to the secret volume.
       - item_server_url
     command: sh -c "python3.11 /app/prodcli-scrape -isuri $(cat /run/secrets/item_server_url) -*"
+    volumes:
+      - leaves_data:/app/leaves
 
   leaf_extractor:
     build:
@@ -28,6 +30,8 @@ services:
       # to the secret volume.
       - item_server_url
     command: sh -c "python3.11 /app/prodcli-crawl -isuri $(cat /run/secrets/item_server_url) -*"
+    volumes:
+      - leaves_data:/app/leaves
 
   synchronizer:
     build:
@@ -58,3 +62,7 @@ services:
 secrets:
   item_server_url:
     file: ./config/item_server_url.txt
+
+# Leaves persistence
+volumes:
+  leaves_data:
