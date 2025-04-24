@@ -473,7 +473,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         assert hbb_ul_tag != None, "No CHABA ul tag was extracted."
         assert jf_ul_tag != None, "No Joe Fresh ul tag was extracted."
 
-        alert = lambda msg: print(f"#------ {msg} ------#")
+        alert = lambda msg: print(f"\n#------ {msg} ------#")
 
         # All relevant department buttons were extracted!
         # Now, extract the urls of all iterable pages (leafs) from these
@@ -484,8 +484,9 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         # single iterable leaf. It contains Deli, Meals-to-Go, Natural Foods,
         # actual Grocery, Meat, and Seafood, despite each being seperate departments.
         if grocery:
-            alert("Extracting leaf(s) for Grocery...")
+            alert("Extracting category urls for Grocery...")
             grocery_urls = await self._get_urls_surface(grocery_ul_tag)
+            print("\n".join(grocery_urls))
             alert(f"Extracting leaf(s) for Grocery...")
             grocery_leafs = await self._extract_leafs_department(grocery_urls, workers)
             leafs_dict[GROCERY_NAME] = grocery_leafs
@@ -493,6 +494,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         if home_beauty_baby:
             alert("Extracting category urls for CHABA")
             hbb_urls = await self._get_urls_surface(hbb_ul_tag)
+            print("\n".join(hbb_urls))
             alert(f"Extracting leaf(s) from CHABA...")
             hbb_leafs = await self._extract_leafs_department(hbb_urls, workers)
             leafs_dict[HOME_BEAUTY_BABY_NAME] = hbb_leafs
@@ -500,6 +502,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         if joe_fresh:
             alert("Extracting category urls for Joe Fresh")
             jf_urls = await self._get_urls_surface(jf_ul_tag)
+            print("\n".join(jf_urls))
             alert(f"Extracting leaf(s) for Joe Fresh...")
             jf_leafs = await self._extract_leafs_department(jf_urls, workers)
             leafs_dict[JF_NAME] = jf_leafs
@@ -559,6 +562,7 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             else:
                 return []
         
+        # Recursive case: the current page isn't a leaf!
         try:
             # Observe the side accordion list of the page, like in
             # https://www.realcanadiansuperstore.ca/en/baby/c/27987?navid=flyout-L2-Baby.
@@ -575,13 +579,15 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
             # are special too (the product tags are distinct).
             return []
         
+        # No timeout observed. Continue recursion by
+        # using the links extracted from the side accordion.
         for div in accordion_soup.children:
-            assert div.get("class")[0] == "css-srrvm8"
-            pulled_list = div.find("ul", class_="css-pc4dq5")
-            see_all_tag = pulled_list.contents[0]
-            assert see_all_tag.string == "See All"
-            link_tag = see_all_tag.find("a", class_="css-1o1i5mr")
-            links.append("https://www.realcanadiansuperstore.ca" + str(link_tag.get("href"))) # TODO: fix harcoded domain string.
+            if div.get("class")[0] == "css-srrvm8":
+                pulled_list = div.find("ul", class_="css-pc4dq5")
+                see_all_tag = pulled_list.contents[0]
+                assert see_all_tag.string == "See All"
+                link_tag = see_all_tag.find("a", class_="css-1o1i5mr")
+                links.append("https://www.realcanadiansuperstore.ca" + str(link_tag.get("href"))) # TODO: fix harcoded domain string.
 
         # Exhaust every path until every
         # leaf is found.
@@ -615,22 +621,23 @@ class RealCanadianPageIteratorAsyncDiv(RealCanadianPageIteratorAsync):
         
         async def negative():
             try:
-                # await page.wait_for_selector("div.chakra-accordion.css-8atqhb")
-                await page.wait_for_selector("div.indiana-scroll-container")
+                # The line directly below incites a bug! For some reason,
+                # playwright catches the indiana-scroll-container in the browser,
+                # unintentionally filtering valid leaf pages.
+                await page.query_selector("div.indiana-scroll-container")
                 await result_queue.put(False)
 
             except playwright._impl._errors.TimeoutError:
                 await result_queue.put(True)
 
         is_leaf_task = asyncio.create_task(positive())
-        not_leaf_task = asyncio.create_task(negative())
+        # not_leaf_task = asyncio.create_task(negative())
         result = await result_queue.get()
         
-        if result:
-            not_leaf_task.cancel()
-
-        else:
-            is_leaf_task.cancel()
+        # if result:
+        # not_leaf_task.cancel()
+        # else:
+        # is_leaf_task.cancel()
         return result
 
     async def _get_last_page(self, page) -> int | None:
