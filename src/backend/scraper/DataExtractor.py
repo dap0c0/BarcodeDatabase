@@ -16,7 +16,8 @@ class DataExtractor():
             - sale price
             - member price
             - non-member price
-            - regular price'''
+            - regular price
+        - stock (in stock, low, or out)'''
 
     # Product title identifier(s)
     PRODUCT_TITLE_ID = "css-6qrhwc"
@@ -43,6 +44,9 @@ class DataExtractor():
     WAS_PRICE_SALE_ID = "css-623q5h"
     WAS_NON_MEMBER_PRICE_ID = "css-esi4gg2"
 
+    # Stock status identifier
+    LOW_OUT_IDENTIFIER = "css-py8788"
+
     def __init__(self, element: Tag):
         assert isinstance(element, Tag), "The object to wrap is not a Tag!"
         self._element = element
@@ -59,7 +63,8 @@ class DataExtractor():
                 "mop_price": "",
                 "non_member_price": "",
                 "before_price": ""
-                    }
+                    },
+            "stock_status": ""
                 }
 
         # Start extracting data
@@ -70,6 +75,7 @@ class DataExtractor():
         self.data["product_package_size"] = self._get_product_package_size()
         self.data["price_descriptor"] = self._get_price_descriptor()
         self.data["prices"] = self._get_price()
+        self.data["stock_status"] = self._get_stock_status()
 
     def json(self, indents=4) -> str:
         ''' Return the json of the data.'''
@@ -201,3 +207,11 @@ class DataExtractor():
                     prices["before_price"] = str(bfp.string)
 
         return prices
+    
+    def _get_stock_status(self) -> str:
+        try:
+            stock_tag = self._element.find("p", class_=f"chakra-text {DataExtractor.LOW_OUT_IDENTIFIER}")
+            return str(stock_tag.string)
+
+        except:
+            return ""

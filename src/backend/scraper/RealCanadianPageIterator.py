@@ -207,7 +207,8 @@ class RealCanadianPageIteratorAsync(RealCanadianPageIterator):
             
             # All the children of the product grid are products!
             for product_div in grid_soup.children:
-                product_dicts.append(DataExtractor(product_div).data)
+                product_data = DataExtractor(product_div).data
+                product_dicts.append(product_data)
 
         return product_dicts
 
